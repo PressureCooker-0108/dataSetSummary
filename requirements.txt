@@ -1,0 +1,11 @@
+streamlit>=1.35.0
+pandas>=2.2.0
+openai>=1.30.0
+matplotlib>=3.8.0
+reportlab>=4.1.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+pydantic-settings>=2.2.1
+pytest>=8.2.0
+watchdog>=4.0.0
+seaborn>=0.13.0
