@@ -905,6 +905,197 @@ def generate_analytics(dataframe: pd.DataFrame) -> Dict[str, Any]:
     return analytics
 
 
+def recommend_visualizations(schema_metadata: Dict[str, Any], api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Asks OpenRouter (owl-alpha) to inspect the dataset's schema and recommend the top 3 most valuable
+    visualizations to display. Returns a JSON dictionary containing the recommendations.
+    Includes a safe local deterministic fallback recommendation if the API is offline.
+    """
+    logger.info("Asking LLM for visualization recommendations.")
+    
+    # 1. Fallback initialization
+    fallback_recommendations = _get_deterministic_graph_recommendations(schema_metadata)
+    
+    # 2. Key Rotation
+    active_key = get_next_api_key(api_key)
+    if not active_key:
+        logger.warning("No API key available for graph recommendations. Reverting to deterministic suggestions.")
+        return fallback_recommendations
+        
+    try:
+        from openai import OpenAI
+    except ImportError:
+        logger.warning("OpenAI SDK missing. Reverting to deterministic suggestions.")
+        return fallback_recommendations
+        
+    # Simplify metadata to prevent token bloat
+    simplified_schema = {}
+    for col, info in schema_metadata.items():
+        simplified_schema[col] = {
+            "dtype": info["dtype"]
+        }
+        if "unique_count" in info:
+            simplified_schema[col]["unique_count"] = info["unique_count"]
+        if "range" in info:
+            simplified_schema[col]["range"] = info["range"]
+            
+    prompt_instruction = (
+        "You are a Senior Data Visualization Specialist and Analytics Platform Architect.\n"
+        "Study the following schema metadata dictionary and recommend exactly three visual plots to render.\n"
+        "These plots will help user discover critical correlations, groupings, or distributions within the cohort.\n\n"
+        "CHART TYPES ALLOWED:\n"
+        "1. 'distribution': Univariate histogram + KDE plot. Requires an 'x_column' which must be numeric (e.g. Age, BMI).\n"
+        "2. 'boxplot': Grouped comparison box plot. Requires a numeric 'y_column' and a low-cardinality categorical/bool 'x_column' (e.g. Gender, diet_type).\n"
+        "3. 'correlation': Bivariate scatter plot. Requires a numeric 'x_column', a numeric 'y_column', and an optional 'hue_column' (which must be categorical/bool).\n\n"
+        "RULES:\n"
+        "1. Only recommend columns that exist in the provided schema. Match capitalization exactly.\n"
+        "2. Keep the charts diverse: recommend exactly one distribution, one boxplot, and one correlation scatter plot.\n"
+        "3. Provide a brief explanation for each chart (description).\n"
+        "4. Output STRICT JSON conforming to the schema below. No extra text, comments or formatting.\n\n"
+        "RESPONSE JSON SCHEMA:\n"
+        "{\n"
+        "  \"recommendations\": [\n"
+        "    {\n"
+        "      \"type\": \"distribution | boxplot | correlation\",\n"
+        "      \"title\": \"Title of the chart\",\n"
+        "      \"description\": \"Brief explanation of why this chart is valuable for this cohort.\",\n"
+        "      \"x_column\": \"column_name\",\n"
+        "      \"y_column\": \"column_name_or_null\",\n"
+        "      \"hue_column\": \"column_name_or_null\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        f"SCHEMA METADATA:\n{json.dumps(simplified_schema)}\n"
+    )
+    
+    client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=active_key,
+        default_headers={
+            "HTTP-Referer": "https://localhost:8501",
+            "X-Title": "NGO Health Data Agent",
+        }
+    )
+    
+    def api_call():
+        try:
+            return client.chat.completions.create(
+                model="openrouter/owl-alpha",
+                messages=[
+                    {"role": "system", "content": "You are a precise data visualization recommendation assistant that outputs strict JSON formats only."},
+                    {"role": "user", "content": prompt_instruction}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+        except Exception as e:
+            if "response_format" in str(e) or "json_object" in str(e).lower():
+                logger.warning("response_format=json_object not supported by model. Retrying without it.")
+                return client.chat.completions.create(
+                    model="openrouter/owl-alpha",
+                    messages=[
+                        {"role": "system", "content": "You are a precise data visualization recommendation assistant that outputs strict JSON formats only."},
+                        {"role": "user", "content": prompt_instruction}
+                    ],
+                    temperature=0.0
+                )
+            raise e
+            
+    try:
+        response = execute_with_backoff(api_call)
+        raw_content = response.choices[0].message.content.strip()
+        
+        # Clean markdown code block formatting if present
+        if raw_content.startswith("```"):
+            lines = raw_content.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_content = "\n".join(lines).strip()
+            
+        payload = json.loads(raw_content)
+        recommendations = payload.get("recommendations", [])
+        
+        # Simple validation check
+        if isinstance(recommendations, list) and len(recommendations) == 3:
+            # Check fields
+            for r in recommendations:
+                if not all(k in r for k in ("type", "title", "description", "x_column")):
+                    raise ValueError("Recommendation missing required keys.")
+            logger.info("LLM graph recommendations parsed successfully.")
+            return payload
+        else:
+            logger.warning("LLM recommendations failed format checks. Reverting to fallback.")
+            return fallback_recommendations
+    except Exception as e:
+        logger.error(f"Failed to query LLM for graph recommendations: {e}", exc_info=True)
+        return fallback_recommendations
+
+
+def _get_deterministic_graph_recommendations(schema_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Generates three default graph recommendations based on columns present in the schema."""
+    numeric_cols = [col for col, info in schema_metadata.items() if "number" in info["dtype"] or "int" in info["dtype"] or "float" in info["dtype"]]
+    cat_cols = [col for col, info in schema_metadata.items() if "object" in info["dtype"] or "str" in info["dtype"] or "string" in info["dtype"] or "category" in info["dtype"]]
+    
+    # Defaults
+    dist_col = "Age" if "Age" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
+    box_num = "BMI" if "BMI" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
+    box_cat = "Gender" if "Gender" in cat_cols else (cat_cols[0] if cat_cols else None)
+    
+    corr_x = "Session_Duration (hours)" if "Session_Duration (hours)" in numeric_cols else (numeric_cols[0] if numeric_cols else None)
+    corr_y = "Calories_Burned" if "Calories_Burned" in numeric_cols else (numeric_cols[1] if len(numeric_cols) > 1 else (numeric_cols[0] if numeric_cols else None))
+    corr_hue = "Gender" if "Gender" in cat_cols else (cat_cols[0] if cat_cols else None)
+    
+    recs = []
+    
+    # 1. Distribution
+    if dist_col:
+        recs.append({
+            "type": "distribution",
+            "title": f"Distribution of {dist_col}",
+            "description": f"Displays the histogram and density approximation of {dist_col} to analyze cohort dispersion.",
+            "x_column": dist_col,
+            "y_column": None,
+            "hue_column": None
+        })
+        
+    # 2. Box plot
+    if box_num and box_cat:
+        recs.append({
+            "type": "boxplot",
+            "title": f"{box_num} comparison by {box_cat}",
+            "description": f"Analyzes how {box_num} varies across different {box_cat} groups.",
+            "x_column": box_cat,
+            "y_column": box_num,
+            "hue_column": None
+        })
+        
+    # 3. Correlation
+    if corr_x and corr_y:
+        recs.append({
+            "type": "correlation",
+            "title": f"Correlation between {corr_x} and {corr_y}",
+            "description": f"Examines the correlation and scatter behavior between {corr_x} and {corr_y}.",
+            "x_column": corr_x,
+            "y_column": corr_y,
+            "hue_column": corr_hue
+        })
+        
+    # Pad to ensure exactly 3 recommendations
+    while len(recs) < 3:
+        recs.append({
+            "type": "distribution",
+            "title": "Univariate Column Analysis",
+            "description": "General column distribution profile.",
+            "x_column": numeric_cols[0] if numeric_cols else (list(schema_metadata.keys())[0] if schema_metadata else ""),
+            "y_column": None,
+            "hue_column": None
+        })
+        
+    return {"recommendations": recs[:3]}
+
+
 def verify_openrouter_connection(api_key: str) -> bool:
     """
     Performs a low-token connection check on startup, requesting a simple 'OK' from the model.

@@ -337,6 +337,13 @@ def get_cached_metadata(dataframe: pd.DataFrame, file_hash: str) -> Dict[str, An
     return extract_schema_metadata(dataframe)
 
 
+@st.cache_data(show_spinner="Querying AI for visualization layout...")
+def get_cached_recommendations(schema_metadata: Dict[str, Any], file_hash: str, api_key: Optional[str]) -> Dict[str, Any]:
+    """Cache LLM visualization recommendations, invalidated on file hash change."""
+    from data_engine import recommend_visualizations
+    return recommend_visualizations(schema_metadata, api_key)
+
+
 # ==============================================================================
 # MAIN APP EXECUTION
 # ==============================================================================
@@ -382,18 +389,27 @@ def main() -> None:
             except Exception:
                 file_hash = "default"
         else:
-            st.error(f"❌ **Dataset Configuration Warning**: Source dataset not found at `{dataset_file.resolve()}`.")
-            st.info("Please verify the configuration variables inside your `.env` settings or copy the dataset to the `data/` directory.")
+            # Graceful landing instructions, waiting for user file upload
+            st.info("👋 **Welcome to the NGO Data Analytics Hub!**")
+            st.markdown("""
+            This platform provides secure, privacy-preserving, and AI-driven visual analytics on participant health cohorts.
+            
+            ### 🚀 Getting Started
+            1. **Ingest your dataset**: Upload a CSV dataset sheet using the **Dataset Ingestion** file uploader in the sidebar on the left.
+            2. **Analyze**: The engine will dynamically parse column metadata, identify categories, and initialize visual dashboard panels.
+            3. **Query & Export**: Ask conversational questions, filter metrics, view AI-recommended charts, and export executive PDF summaries.
+            
+            *Note: To leverage conversational queries or LLM report summaries, configure your OpenRouter API Key in the sidebar override or your environment.*
+            """)
             return
             
     # Reset filters if dataset changed to avoid slider bounds ValueError crash
     if "current_file_hash" not in st.session_state or st.session_state.current_file_hash != file_hash:
         logger.info("New dataset file hash detected. Clearing session state filters.")
         st.session_state.current_file_hash = file_hash
-        # Clear filter widget values from session state
-        for key in ["widget_age_range", "widget_weight_range", "widget_genders", 
-                    "widget_diets", "widget_workouts", "nl_payload", "nl_query"]:
-            if key in st.session_state:
+        # Clear all state variables except credentials override to force clean re-initialization
+        for key in list(st.session_state.keys()):
+            if key not in ("current_file_hash", "api_key_override"):
                 del st.session_state[key]
         st.rerun()
 
@@ -742,69 +758,126 @@ def main() -> None:
             if matched_count == 0:
                 st.warning("⚠️ **Empty Filter Result**: No records match the combined filter criteria. Try expanding range widgets or clearing conversational queries.")
             else:
-                # 2. Render Seaborn Charts side-by-side
-                st.markdown("#### 📈 Visual Analytics Dashboard")
-                v_col1, v_col2 = st.columns(2)
+                # 2. Query LLM Graph Recommendations (token-efficient caching)
+                recommendations_payload = get_cached_recommendations(
+                    metadata, 
+                    file_hash, 
+                    api_key=st.session_state.api_key_override
+                )
+                recommendations = recommendations_payload.get("recommendations", [])
                 
-                # Check numeric options
-                numeric_cols = filtered_df.select_dtypes(include=["number"]).columns.tolist()
-                group_cols = [c for c in filtered_df.select_dtypes(include=["object", "category", "bool", "string", "str"]).columns if filtered_df[c].nunique() <= 10]
+                # Render AI Recommended Dashboard
+                st.markdown("#### 📈 AI-Recommended Visual Analytics")
+                st.markdown(
+                    "*The AI analyzed the dataset's schema and identified the following three optimized "
+                    "visualizations to uncover program trends.*"
+                )
                 
-                chart_col = None
-                if numeric_cols:
-                    with v_col1:
-                        chart_col = st.selectbox(
-                            "Select Distribution Variable (KDE + Hist):", 
-                            options=numeric_cols,
-                            index=numeric_cols.index("Age") if "Age" in numeric_cols else 0,
-                            key="selected_chart_col"
-                        )
-                        render_distribution_plot(filtered_df, chart_col)
-                else:
-                    st.info("No numeric columns available in the dataset for distribution plotting.")
-                    
-                if numeric_cols and group_cols and chart_col:
-                    with v_col2:
-                        groupby_col = st.selectbox(
-                            "Select Grouping Category (Box Plot):",
-                            options=group_cols,
-                            index=group_cols.index("Gender") if "Gender" in group_cols else 0,
-                            key="selected_groupby_col"
-                        )
-                        render_group_boxplot(filtered_df, chart_col, groupby_col)
-                else:
-                    st.info("No grouping category columns available in the dataset for boxplot comparison.")
-                    
-                st.markdown("---")
+                col_left, col_right = st.columns(2)
                 
-                # 3. Correlation Visualization
-                st.markdown("#### 🔗 Correlation Explorations")
-                if len(numeric_cols) >= 2:
-                    corr_col1, corr_col2, corr_col3 = st.columns(3)
+                with col_left:
+                    # Chart 1: Distribution
+                    if len(recommendations) > 0:
+                        rec = recommendations[0]
+                        st.markdown(f"##### **1. {rec.get('title')}**")
+                        if rec.get('description'):
+                            st.markdown(f"<p style='font-size:0.85rem; color:#475569; margin-top:-0.5rem;'>💡 <i>{rec.get('description')}</i></p>", unsafe_allow_html=True)
+                        x_col = rec.get("x_column")
+                        if x_col in filtered_df.columns:
+                            render_distribution_plot(filtered_df, x_col)
+                        else:
+                            st.info(f"Recommended column '{x_col}' is missing.")
+                            
+                    st.markdown("<br>", unsafe_allow_html=True)
                     
-                    with corr_col1:
-                        x_axis_var = st.selectbox(
-                            "X-Axis Variable", 
-                            options=numeric_cols,
-                            index=numeric_cols.index("Session_Duration (hours)") if "Session_Duration (hours)" in numeric_cols else 0
-                        )
-                    with corr_col2:
-                        y_axis_var = st.selectbox(
-                            "Y-Axis Variable", 
-                            options=numeric_cols,
-                            index=numeric_cols.index("Calories_Burned") if "Calories_Burned" in numeric_cols else 0
-                        )
-                    with corr_col3:
-                        hue_axis_var = st.selectbox(
-                            "Color / Legend Variable", 
-                            options=["None"] + group_cols,
-                            index=1 if "Gender" in group_cols else 0
-                        )
+                    # Chart 2: Grouped Box Plot
+                    if len(recommendations) > 1:
+                        rec = recommendations[1]
+                        st.markdown(f"##### **2. {rec.get('title')}**")
+                        if rec.get('description'):
+                            st.markdown(f"<p style='font-size:0.85rem; color:#475569; margin-top:-0.5rem;'>💡 <i>{rec.get('description')}</i></p>", unsafe_allow_html=True)
+                        x_col = rec.get("x_column")
+                        y_col = rec.get("y_column")
+                        if x_col in filtered_df.columns and y_col in filtered_df.columns:
+                            render_group_boxplot(filtered_df, y_col, x_col)
+                        else:
+                            st.info(f"Recommended comparison columns ('{x_col}', '{y_col}') are missing.")
+                            
+                with col_right:
+                    # Chart 3: Correlation Scatter Plot
+                    if len(recommendations) > 2:
+                        rec = recommendations[2]
+                        st.markdown(f"##### **3. {rec.get('title')}**")
+                        if rec.get('description'):
+                            st.markdown(f"<p style='font-size:0.85rem; color:#475569; margin-top:-0.5rem;'>💡 <i>{rec.get('description')}</i></p>", unsafe_allow_html=True)
+                        x_col = rec.get("x_column")
+                        y_col = rec.get("y_column")
+                        hue_col = rec.get("hue_column")
+                        if x_col in filtered_df.columns and y_col in filtered_df.columns:
+                            hue_var = hue_col if (hue_col and hue_col in filtered_df.columns and hue_col != "None") else None
+                            render_scatter_relationship(filtered_df, x_col, y_col, hue_var)
+                        else:
+                            st.info(f"Recommended correlation columns ('{x_col}', '{y_col}') are missing.")
+                            
+                # Custom Manual Overrides Expander
+                st.markdown("<br>", unsafe_allow_html=True)
+                with st.expander("🔧 Custom Visualization Overrides (Manual Selectors)", expanded=False):
+                    st.markdown("Configure manual overrides to customize the variables displayed on the dashboard:")
+                    
+                    v_col1, v_col2 = st.columns(2)
+                    chart_col = None
+                    if numeric_cols:
+                        with v_col1:
+                            chart_col = st.selectbox(
+                                "Select Custom Distribution Variable (KDE + Hist):", 
+                                options=numeric_cols,
+                                index=numeric_cols.index("Age") if "Age" in numeric_cols else 0,
+                                key="selected_chart_col"
+                            )
+                            render_distribution_plot(filtered_df, chart_col)
+                    else:
+                        st.info("No numeric columns available in the dataset for distribution plotting.")
                         
-                    hue_var = None if hue_axis_var == "None" else hue_axis_var
-                    render_scatter_relationship(filtered_df, x_axis_var, y_axis_var, hue_var)
-                else:
-                    st.info("At least two numeric columns are required in the dataset to plot correlations.")
+                    if numeric_cols and group_cols and chart_col:
+                        with v_col2:
+                            groupby_col = st.selectbox(
+                                "Select Custom Grouping Category (Box Plot):",
+                                options=group_cols,
+                                index=group_cols.index("Gender") if "Gender" in group_cols else 0,
+                                key="selected_groupby_col"
+                            )
+                            render_group_boxplot(filtered_df, chart_col, groupby_col)
+                    else:
+                        st.info("No grouping category columns available in the dataset for boxplot comparison.")
+                        
+                    st.markdown("---")
+                    st.markdown("##### Custom Correlation Scatter Plot")
+                    if len(numeric_cols) >= 2:
+                        corr_col1, corr_col2, corr_col3 = st.columns(3)
+                        
+                        with corr_col1:
+                            x_axis_var = st.selectbox(
+                                "X-Axis Variable", 
+                                options=numeric_cols,
+                                index=numeric_cols.index("Session_Duration (hours)") if "Session_Duration (hours)" in numeric_cols else 0
+                            )
+                        with corr_col2:
+                            y_axis_var = st.selectbox(
+                                "Y-Axis Variable", 
+                                options=numeric_cols,
+                                index=numeric_cols.index("Calories_Burned") if "Calories_Burned" in numeric_cols else 0
+                            )
+                        with corr_col3:
+                            hue_axis_var = st.selectbox(
+                                "Color / Legend Variable", 
+                                options=["None"] + group_cols,
+                                index=1 if "Gender" in group_cols else 0
+                            )
+                            
+                        hue_var = None if hue_axis_var == "None" else hue_axis_var
+                        render_scatter_relationship(filtered_df, x_axis_var, y_axis_var, hue_var)
+                    else:
+                        st.info("At least two numeric columns are required in the dataset to plot correlations.")
                 
         # --- TAB 2: DATA PREVIEW ---
         with tab_preview:
@@ -831,7 +904,7 @@ def main() -> None:
             
             # Map structural components
             col_list = []
-            for col_name, info in get_cached_metadata(df_original).items():
+            for col_name, info in get_cached_metadata(df_original, file_hash).items():
                 col_list.append({
                     "Variable name": col_name,
                     "Dtype": info["dtype"],

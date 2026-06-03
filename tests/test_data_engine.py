@@ -22,7 +22,8 @@ from data_engine import (
     generate_executive_report_pdf,
     verify_reporting_pipeline,
     get_next_api_key,
-    verify_openrouter_connection
+    verify_openrouter_connection,
+    recommend_visualizations
 )
 
 def test_initialize_logger():
@@ -363,3 +364,94 @@ def test_execute_with_backoff_retry_then_success():
         assert result == mock_response
         assert call_count == 2
         mock_sleep.assert_called_once_with(2.0)
+
+
+def test_recommend_visualizations_fallback():
+    """Test recommend_visualizations returns deterministic fallback when API key is missing or offline."""
+    # Build a simple schema metadata structure
+    schema_meta = {
+        "Age": {"dtype": "int64", "range": {"min": 18, "max": 80}},
+        "BMI": {"dtype": "float64", "range": {"min": 15.0, "max": 40.0}},
+        "Gender": {"dtype": "object", "unique_count": 2, "unique_values": ["Male", "Female"]},
+        "Session_Duration (hours)": {"dtype": "float64", "range": {"min": 0.5, "max": 4.0}},
+        "Calories_Burned": {"dtype": "float64", "range": {"min": 100, "max": 1000}}
+    }
+    
+    # Run with empty api_key to force fallback
+    recs = recommend_visualizations(schema_meta, api_key="")
+    assert "recommendations" in recs
+    assert len(recs["recommendations"]) == 3
+    
+    types = [r["type"] for r in recs["recommendations"]]
+    assert "distribution" in types
+    assert "boxplot" in types
+    assert "correlation" in types
+
+
+def test_recommend_visualizations_success():
+    """Test recommend_visualizations successfully parses valid JSON response from OpenAI/OpenRouter API."""
+    schema_meta = {
+        "Age": {"dtype": "int64", "range": {"min": 18, "max": 80}},
+        "Gender": {"dtype": "object", "unique_count": 2, "unique_values": ["Male", "Female"]}
+    }
+    
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = """
+    {
+      "recommendations": [
+        {
+          "type": "distribution",
+          "title": "LLM Distribution of Age",
+          "description": "Valuable distribution description",
+          "x_column": "Age",
+          "y_column": null,
+          "hue_column": null
+        },
+        {
+          "type": "boxplot",
+          "title": "LLM Boxplot",
+          "description": "Valuable boxplot description",
+          "x_column": "Gender",
+          "y_column": "Age",
+          "hue_column": null
+        },
+        {
+          "type": "correlation",
+          "title": "LLM Correlation",
+          "description": "Valuable correlation description",
+          "x_column": "Age",
+          "y_column": "Age",
+          "hue_column": "Gender"
+        }
+      ]
+    }
+    """
+    
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_response):
+        # We pass a non-empty api_key override or mock settings so that it invokes the API
+        with patch("data_engine.get_next_api_key", return_value="mock_key"):
+            recs = recommend_visualizations(schema_meta, api_key="mock_key")
+            assert "recommendations" in recs
+            assert len(recs["recommendations"]) == 3
+            assert recs["recommendations"][0]["title"] == "LLM Distribution of Age"
+            assert recs["recommendations"][1]["type"] == "boxplot"
+            assert recs["recommendations"][2]["hue_column"] == "Gender"
+
+
+def test_recommend_visualizations_malformed_json_fallback():
+    """Test recommend_visualizations falls back to deterministic recommendations if LLM returns malformed JSON."""
+    schema_meta = {
+        "Age": {"dtype": "int64", "range": {"min": 18, "max": 80}},
+        "Gender": {"dtype": "object", "unique_count": 2, "unique_values": ["Male", "Female"]}
+    }
+    
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "not a valid json string"
+    
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_response):
+        with patch("data_engine.get_next_api_key", return_value="mock_key"):
+            recs = recommend_visualizations(schema_meta, api_key="mock_key")
+            assert "recommendations" in recs
+            assert len(recs["recommendations"]) == 3
+            # Check that it falls back to the deterministic format
+            assert recs["recommendations"][0]["title"].startswith("Distribution of")
