@@ -73,9 +73,28 @@ def inject_custom_styles() -> None:
         /* Import premium fonts */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;800&display=swap');
         
-        html, body, [class*="css"] {
+        html, body {
             font-family: 'Inter', sans-serif;
-            background-color: #f8fafc;
+        }
+        
+        /* Enforce page light background */
+        [data-testid="stAppViewContainer"] {
+            background-color: #f8fafc !important;
+        }
+        
+        /* Force dark text color across all main container text elements for high readability */
+        [data-testid="stAppViewContainer"] p, 
+        [data-testid="stAppViewContainer"] span, 
+        [data-testid="stAppViewContainer"] label, 
+        [data-testid="stAppViewContainer"] li, 
+        [data-testid="stAppViewContainer"] h1, 
+        [data-testid="stAppViewContainer"] h2, 
+        [data-testid="stAppViewContainer"] h3, 
+        [data-testid="stAppViewContainer"] h4, 
+        [data-testid="stAppViewContainer"] h5, 
+        [data-testid="stAppViewContainer"] h6,
+        [data-testid="stAppViewContainer"] div {
+            color: #0f172a;
         }
         
         /* Gradient titles */
@@ -85,19 +104,19 @@ def inject_custom_styles() -> None:
             font-weight: 800;
             background: linear-gradient(135deg, #6366f1 0%, #0d9488 50%, #0284c7 100%);
             -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            -webkit-text-fill-color: transparent !important;
             margin-bottom: 0.1rem;
         }
         
         .sub-header {
             font-size: 1.1rem;
-            color: #64748b;
+            color: #64748b !important;
             margin-bottom: 2rem;
         }
         
         /* Premium Card Layouts with glassmorphic look, gradient shadows and hover effect */
         .kpi-card {
-            background: #ffffff;
+            background: #ffffff !important;
             border-radius: 16px;
             padding: 1.5rem 1rem;
             box-shadow: 0 4px 20px 0 rgba(148, 163, 184, 0.08);
@@ -128,7 +147,7 @@ def inject_custom_styles() -> None:
         .kpi-label {
             font-size: 0.75rem;
             font-weight: 600;
-            color: #64748b;
+            color: #64748b !important;
             text-transform: uppercase;
             letter-spacing: 0.075em;
             margin-bottom: 0.5rem;
@@ -138,7 +157,7 @@ def inject_custom_styles() -> None:
             font-family: 'Outfit', sans-serif;
             font-size: 1.8rem;
             font-weight: 700;
-            color: #0f172a;
+            color: #0f172a !important;
         }
         
         /* Status Badges */
@@ -153,21 +172,21 @@ def inject_custom_styles() -> None:
         }
         
         .badge-success {
-            background-color: #ecfdf5;
-            color: #047857;
-            border: 1px solid #a7f3d0;
+            background-color: #ecfdf5 !important;
+            color: #047857 !important;
+            border: 1px solid #a7f3d0 !important;
         }
         
         .badge-error {
-            background-color: #fff5f5;
-            color: #c53030;
-            border: 1px solid #feb2b2;
+            background-color: #fff5f5 !important;
+            color: #c53030 !important;
+            border: 1px solid #feb2b2 !important;
         }
         
         .badge-warning {
-            background-color: #fffdf5;
-            color: #d97706;
-            border: 1px solid #fde68a;
+            background-color: #fffdf5 !important;
+            color: #d97706 !important;
+            border: 1px solid #fde68a !important;
         }
 
         /* Streamlit primary and secondary buttons style override */
@@ -208,19 +227,38 @@ def inject_custom_styles() -> None:
         }
 
         /* Style text inputs */
-        .stTextInput input {
+        .stTextInput input, .stTextArea textarea {
             border-radius: 10px !important;
             border: 1px solid #e2e8f0 !important;
             font-family: 'Inter', sans-serif !important;
             padding: 0.6rem 1rem !important;
             background-color: #ffffff !important;
+            color: #0f172a !important;
             transition: all 0.2s ease-in-out !important;
             box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
         }
         
-        .stTextInput input:focus {
+        .stTextInput input:focus, .stTextArea textarea:focus {
             border-color: #6366f1 !important;
             box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+        }
+
+        /* Style selectbox & multiselect closed state dropdown boxes */
+        .stSelectbox div[data-baseweb="select"], 
+        .stMultiSelect div[data-baseweb="select"] {
+            background-color: #ffffff !important;
+            border-radius: 10px !important;
+            border: 1px solid #e2e8f0 !important;
+        }
+        
+        .stSelectbox div[data-baseweb="select"] *, 
+        .stMultiSelect div[data-baseweb="select"] * {
+            color: #0f172a !important;
+        }
+
+        /* Force dark text inside dataframes and tables */
+        .stDataFrame div {
+            color: #0f172a !important;
         }
 
         /* Sidebar layout styling */
@@ -233,6 +271,20 @@ def inject_custom_styles() -> None:
             border-bottom: 2px solid #e2e8f0;
             padding-bottom: 0.5rem;
             margin-bottom: 1.5rem;
+            color: #0f172a !important;
+        }
+
+        /* Force sidebar labels, headers, and text to be dark slate */
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] h4,
+        [data-testid="stSidebar"] h5,
+        [data-testid="stSidebar"] h6 {
+            color: #1e293b !important;
         }
 
         /* Modern tabs styling */
@@ -267,7 +319,7 @@ def inject_custom_styles() -> None:
 
         /* Card panels for instructions */
         .welcome-card {
-            background-color: #ffffff;
+            background-color: #ffffff !important;
             border-radius: 16px;
             padding: 2.5rem;
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
@@ -277,7 +329,7 @@ def inject_custom_styles() -> None:
         
         .step-badge {
             background: linear-gradient(135deg, #6366f1, #0d9488);
-            color: white;
+            color: white !important;
             border-radius: 50%;
             width: 28px;
             height: 28px;
@@ -298,7 +350,7 @@ def inject_custom_styles() -> None:
 
         .step-text {
             font-size: 1rem;
-            color: #334155;
+            color: #334155 !important;
             line-height: 1.6;
         }
     </style>
