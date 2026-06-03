@@ -25,7 +25,8 @@ from data_engine import (
     generate_executive_insights,
     generate_executive_report_pdf,
     verify_reporting_pipeline,
-    verify_openrouter_connection
+    verify_openrouter_connection,
+    get_deterministic_graph_recommendations
 )
 
 def check_any_key_configured(override_keys_str: str = None) -> bool:
@@ -344,11 +345,12 @@ def initialize_session_state(metadata: Dict[str, Any]) -> None:
 # VISUALIZATION ENGINE (MATPLOTLIB & SEABORN)
 # ==============================================================================
 
-def render_distribution_plot(dataframe: pd.DataFrame, column_name: str) -> None:
+def render_distribution_plot(dataframe: pd.DataFrame, column_name: str, show_on_streamlit: bool = True) -> None:
     """Renders a Seaborn distribution plot (histogram + KDE) to Streamlit and saves to disk."""
     try:
         if dataframe.empty or column_name not in dataframe.columns:
-            st.info("No data available to plot.")
+            if show_on_streamlit:
+                st.info("No data available to plot.")
             return
 
         fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
@@ -387,18 +389,21 @@ def render_distribution_plot(dataframe: pd.DataFrame, column_name: str) -> None:
         except Exception as save_err:
             logger.error(f"Failed to save active chart: {save_err}")
             
-        st.pyplot(fig)
+        if show_on_streamlit:
+            st.pyplot(fig)
         plt.close(fig)
     except Exception as e:
         logger.error(f"Error rendering distribution plot: {e}", exc_info=True)
-        st.error("Failed to generate distribution visualization.")
+        if show_on_streamlit:
+            st.error("Failed to generate distribution visualization.")
 
 
-def render_group_boxplot(dataframe: pd.DataFrame, numeric_col: str, group_col: str) -> None:
+def render_group_boxplot(dataframe: pd.DataFrame, numeric_col: str, group_col: str, show_on_streamlit: bool = True) -> None:
     """Renders a Seaborn Box Plot grouped by a categorical column and saves to disk."""
     try:
         if dataframe.empty or numeric_col not in dataframe.columns or group_col not in dataframe.columns:
-            st.info("No grouping data available.")
+            if show_on_streamlit:
+                st.info("No grouping data available.")
             return
 
         fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
@@ -435,18 +440,21 @@ def render_group_boxplot(dataframe: pd.DataFrame, numeric_col: str, group_col: s
         except Exception as save_err:
             logger.error(f"Failed to save active boxplot chart: {save_err}")
             
-        st.pyplot(fig)
+        if show_on_streamlit:
+            st.pyplot(fig)
         plt.close(fig)
     except Exception as e:
         logger.error(f"Error rendering boxplot: {e}", exc_info=True)
-        st.error("Failed to generate boxplot comparison visualization.")
+        if show_on_streamlit:
+            st.error("Failed to generate boxplot comparison visualization.")
 
 
-def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str, hue_col: str = None) -> None:
+def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str, hue_col: str = None, show_on_streamlit: bool = True) -> None:
     """Renders a Seaborn Scatter Plot checking correlation of two parameters."""
     try:
         if dataframe.empty or x_col not in dataframe.columns or y_col not in dataframe.columns:
-            st.info("No correlation columns available.")
+            if show_on_streamlit:
+                st.info("No correlation columns available.")
             return
 
         fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
@@ -477,11 +485,14 @@ def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str,
             ax.spines[spine].set_visible(False)
             
         plt.tight_layout()
-        st.pyplot(fig)
+        if show_on_streamlit:
+            st.pyplot(fig)
         plt.close(fig)
     except Exception as e:
         logger.error(f"Error rendering scatter plot: {e}", exc_info=True)
-        st.error("Failed to generate scatter correlation plot.")
+        if show_on_streamlit:
+            st.error("Failed to generate scatter correlation plot.")
+
 
 
 
@@ -908,10 +919,20 @@ def main() -> None:
                     elif "hour" in col_lower or "duration" in col_lower:
                         unit = "h"
                     
-                    if float(val).is_integer():
-                        avg_val = f"{int(val):,}{unit}"
+                    if pd.isna(val):
+                        avg_val = "N/A"
                     else:
-                        avg_val = f"{val:,.1f}{unit}"
+                        try:
+                            f_val = float(val)
+                            import numpy as np
+                            if np.isnan(f_val) or np.isinf(f_val):
+                                avg_val = "N/A"
+                            elif f_val.is_integer():
+                                avg_val = f"{int(f_val):,}{unit}"
+                            else:
+                                avg_val = f"{f_val:,.1f}{unit}"
+                        except (ValueError, TypeError):
+                            avg_val = "N/A"
                 
                 # Format label dynamically
                 display_label = f"Avg {col}"
@@ -932,18 +953,14 @@ def main() -> None:
             if matched_count == 0:
                 st.warning("⚠️ **Empty Filter Result**: No records match the combined filter criteria. Try expanding range widgets or clearing conversational queries.")
             else:
-                # 2. Query LLM Graph Recommendations (token-efficient caching)
-                recommendations_payload = get_cached_recommendations(
-                    metadata, 
-                    file_hash, 
-                    api_key=st.session_state.api_key_override
-                )
+                # 2. Get Dynamic Graph Recommendations (100% local and deterministic)
+                recommendations_payload = get_deterministic_graph_recommendations(metadata)
                 recommendations = recommendations_payload.get("recommendations", [])
                 
-                # Render AI Recommended Dashboard
-                st.markdown("#### 📈 AI-Recommended Visual Analytics")
+                # Render Recommended Dashboard
+                st.markdown("#### 📈 Dynamic Visual Analytics")
                 st.markdown(
-                    "*The AI analyzed the dataset's schema and identified the following three optimized "
+                    "*The system analyzed the dataset's schema and identified the following three optimized "
                     "visualizations to uncover program trends.*"
                 )
                 
@@ -1105,14 +1122,54 @@ def main() -> None:
                     
                 if st.button("Generate Executive Report", type="primary", use_container_width=True):
                     # Progress triggers
-                    with st.spinner("1. Querying OpenRouter Public Health Analyst for insights..."):
+                    # 1. Fetch AI Graph Recommendations (only triggered during report generation)
+                    with st.spinner("1. Querying OpenRouter to select optimized report visual chart..."):
+                        recommendations_payload = get_cached_recommendations(
+                            metadata, 
+                            file_hash, 
+                            api_key=st.session_state.api_key_override
+                        )
+                        recommendations = recommendations_payload.get("recommendations", [])
+                        
+                    # 2. Render recommended chart in background
+                    with st.spinner("2. Rendering report visual chart in background..."):
+                        rendered_background = False
+                        if recommendations:
+                            rec = recommendations[0]  # Take primary recommendation
+                            rec_type = rec.get("type")
+                            x_col = rec.get("x_column")
+                            y_col = rec.get("y_column")
+                            hue_col = rec.get("hue_column")
+                            
+                            # Render safely based on type
+                            if rec_type == "distribution" and x_col in filtered_df.columns:
+                                render_distribution_plot(filtered_df, x_col, show_on_streamlit=False)
+                                rendered_background = True
+                            elif rec_type == "boxplot" and x_col in filtered_df.columns and y_col in filtered_df.columns:
+                                render_group_boxplot(filtered_df, y_col, x_col, show_on_streamlit=False)
+                                rendered_background = True
+                            elif rec_type == "correlation" and x_col in filtered_df.columns and y_col in filtered_df.columns:
+                                hue_var = hue_col if (hue_col and hue_col in filtered_df.columns and hue_col != "None") else None
+                                render_scatter_relationship(filtered_df, x_col, y_col, hue_var, show_on_streamlit=False)
+                                rendered_background = True
+                                
+                        if not rendered_background:
+                            # Fallback to dynamic distribution chart in background
+                            displayable_cols = [
+                                col for col in numeric_cols 
+                                if col.lower() not in ["beneficiary_id", "id", "ssn", "index", "unnamed: 0"]
+                            ]
+                            if displayable_cols:
+                                render_distribution_plot(filtered_df, displayable_cols[0], show_on_streamlit=False)
+
+                    with st.spinner("3. Querying OpenRouter Public Health Analyst for insights..."):
                         insights = generate_executive_insights(
                             analytics, 
                             api_key=st.session_state.api_key_override
                         )
                         
-                    with st.spinner("2. Compiling ReportLab PDF layout page..."):
-                        # Define path to active chart saved during Matplotlib execution
+                    with st.spinner("4. Compiling ReportLab PDF layout page..."):
+                        # Define path to active chart saved during background Matplotlib execution
                         chart_file_path = str(Path(BASE_DIR) / "reports" / "active_chart.png")
                         try:
                             pdf_data = generate_executive_report_pdf(

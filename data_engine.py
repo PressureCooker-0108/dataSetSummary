@@ -914,7 +914,7 @@ def recommend_visualizations(schema_metadata: Dict[str, Any], api_key: Optional[
     logger.info("Asking LLM for visualization recommendations.")
     
     # 1. Fallback initialization
-    fallback_recommendations = _get_deterministic_graph_recommendations(schema_metadata)
+    fallback_recommendations = get_deterministic_graph_recommendations(schema_metadata)
     
     # 2. Key Rotation
     active_key = get_next_api_key(api_key)
@@ -1033,7 +1033,7 @@ def recommend_visualizations(schema_metadata: Dict[str, Any], api_key: Optional[
         return fallback_recommendations
 
 
-def _get_deterministic_graph_recommendations(schema_metadata: Dict[str, Any]) -> Dict[str, Any]:
+def get_deterministic_graph_recommendations(schema_metadata: Dict[str, Any]) -> Dict[str, Any]:
     """Generates three default graph recommendations based on columns present in the schema."""
     numeric_cols = [col for col, info in schema_metadata.items() if "number" in info["dtype"] or "int" in info["dtype"] or "float" in info["dtype"]]
     cat_cols = [col for col, info in schema_metadata.items() if "object" in info["dtype"] or "str" in info["dtype"] or "string" in info["dtype"] or "category" in info["dtype"]]
@@ -1510,15 +1510,26 @@ def generate_executive_report_pdf(
     # Section 2: KPI Metrics Block
     story.append(Paragraph("Aggregate Cohort KPIs", section_style))
     
-    # Compute aggregates from summary
+    # Compute aggregates from summary safely
     matched_count = analytics_summary.get("row_count", 0)
     num_metrics = analytics_summary.get("numeric_metrics", {})
     
-    bmi_avg = f"{num_metrics['BMI']['mean']:.1f}" if "BMI" in num_metrics else "N/A"
-    cals_avg = f"{num_metrics['Calories']['mean']:.1f}" if "Calories" in num_metrics else "N/A"
-    protein_avg = f"{num_metrics['Proteins']['mean']:.1f}g" if "Proteins" in num_metrics else "N/A"
-    carbs_avg = f"{num_metrics['Carbs']['mean']:.1f}g" if "Carbs" in num_metrics else "N/A"
-    fat_avg = f"{num_metrics['Fats']['mean']:.1f}g" if "Fats" in num_metrics else "N/A"
+    def format_kpi(col_name, suffix=""):
+        if col_name not in num_metrics:
+            return "N/A"
+        val = num_metrics[col_name].get("mean")
+        if val is None or pd.isna(val):
+            return "N/A"
+        try:
+            return f"{float(val):.1f}{suffix}"
+        except (ValueError, TypeError):
+            return "N/A"
+            
+    bmi_avg = format_kpi("BMI")
+    cals_avg = format_kpi("Calories")
+    protein_avg = format_kpi("Proteins", "g")
+    carbs_avg = format_kpi("Carbs", "g")
+    fat_avg = format_kpi("Fats", "g")
     
     kpi_data = [
         [
