@@ -3,6 +3,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
+import hashlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -174,11 +175,22 @@ def initialize_session_state(metadata: Dict[str, Any]) -> None:
         st.session_state.selected_groupby_col = "Gender"
         st.session_state.api_key_override = ""
         
-        # Default numeric range configurations
-        st.session_state.min_age = int(metadata.get("Age", {}).get("range", {}).get("min", 18))
-        st.session_state.max_age = int(metadata.get("Age", {}).get("range", {}).get("max", 60))
-        st.session_state.min_weight = int(metadata.get("Weight (kg)", {}).get("range", {}).get("min", 40))
-        st.session_state.max_weight = int(metadata.get("Weight (kg)", {}).get("range", {}).get("max", 120))
+        # Default numeric range configurations with safety guards
+        range_age = metadata.get("Age", {}).get("range", {}) if "Age" in metadata else None
+        if range_age:
+            st.session_state.min_age = int(range_age.get("min", 18))
+            st.session_state.max_age = int(range_age.get("max", 60))
+        else:
+            st.session_state.min_age = 18
+            st.session_state.max_age = 60
+            
+        range_weight = metadata.get("Weight (kg)", {}).get("range", {}) if "Weight (kg)" in metadata else None
+        if range_weight:
+            st.session_state.min_weight = int(range_weight.get("min", 40))
+            st.session_state.max_weight = int(range_weight.get("max", 120))
+        else:
+            st.session_state.min_weight = 40
+            st.session_state.max_weight = 120
 
 
 # ==============================================================================
@@ -313,15 +325,15 @@ def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str,
 # PIPELINE INGESTION CACHING
 # ==============================================================================
 
-@st.cache_data(show_spinner="Safely ingesting CSV file from local disk...")
-def get_cached_dataframe(file_path: Path) -> pd.DataFrame:
-    """Cache loaded DataFrame to minimize redundant disk IO."""
+@st.cache_data(show_spinner="Safely ingesting CSV file...")
+def get_cached_dataframe(file_path: Path, file_hash: str) -> pd.DataFrame:
+    """Cache loaded DataFrame to minimize redundant disk IO, invalidated on file hash change."""
     return load_csv(file_path)
 
 
 @st.cache_data(show_spinner="Extracting structural schema boundaries...")
-def get_cached_metadata(dataframe: pd.DataFrame) -> Dict[str, Any]:
-    """Cache extracted metadata structures."""
+def get_cached_metadata(dataframe: pd.DataFrame, file_hash: str) -> Dict[str, Any]:
+    """Cache extracted metadata structures, invalidated on file hash change."""
     return extract_schema_metadata(dataframe)
 
 
@@ -332,29 +344,68 @@ def get_cached_metadata(dataframe: pd.DataFrame) -> Dict[str, Any]:
 def main() -> None:
     logger.info("Application starting up in Streamlit environment.")
     
-    # 1. Verify CSV path configuration
-    dataset_file = Path(settings.DATASET_PATH)
-    file_exists = dataset_file.exists()
-    
     # Render layout Headers
     st.markdown('<h1 class="main-header">NGO Data Analytics Platform</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Secure, privacy-compliant analysis dashboard with hybrid conversational queries.</p>', unsafe_allow_html=True)
     
-    # Check if dataset is available
-    if not file_exists:
-        st.error(f"❌ **Dataset Configuration Warning**: Source dataset not found at `{dataset_file.resolve()}`.")
-        st.info("Please verify the configuration variables inside your `.env` settings or copy the dataset to the `data/` directory.")
-        return
+    # 1. Sidebar File Uploader for Custom Sheets
+    st.sidebar.markdown("<h2 style='font-family: Outfit; font-weight: 600; color: #1e293b;'>Dataset Ingestion</h2>", unsafe_allow_html=True)
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload custom CSV sheet", 
+        type=["csv"], 
+        help="Upload a new CSV dataset to analyze. If empty, the default dataset is used."
+    )
+    
+    dataset_file = None
+    file_hash = ""
+    
+    if uploaded_file is not None:
+        file_bytes = uploaded_file.getvalue()
+        file_hash = hashlib.md5(file_bytes).hexdigest()
+        dataset_file = Path(BASE_DIR) / "data" / "uploaded_dataset.csv"
         
+        # Save file locally if it's new or content changed
+        try:
+            if not dataset_file.exists() or hashlib.md5(dataset_file.read_bytes()).hexdigest() != file_hash:
+                dataset_file.parent.mkdir(parents=True, exist_ok=True)
+                dataset_file.write_bytes(file_bytes)
+                logger.info(f"Saved uploaded dataset to {dataset_file} (MD5: {file_hash})")
+        except Exception as save_err:
+            st.error(f"Failed to ingest custom CSV file: {save_err}")
+            return
+    else:
+        # Fall back to default path
+        dataset_file = Path(settings.DATASET_PATH)
+        if dataset_file.exists():
+            try:
+                file_hash = hashlib.md5(dataset_file.read_bytes()).hexdigest()
+            except Exception:
+                file_hash = "default"
+        else:
+            st.error(f"❌ **Dataset Configuration Warning**: Source dataset not found at `{dataset_file.resolve()}`.")
+            st.info("Please verify the configuration variables inside your `.env` settings or copy the dataset to the `data/` directory.")
+            return
+            
+    # Reset filters if dataset changed to avoid slider bounds ValueError crash
+    if "current_file_hash" not in st.session_state or st.session_state.current_file_hash != file_hash:
+        logger.info("New dataset file hash detected. Clearing session state filters.")
+        st.session_state.current_file_hash = file_hash
+        # Clear filter widget values from session state
+        for key in ["widget_age_range", "widget_weight_range", "widget_genders", 
+                    "widget_diets", "widget_workouts", "nl_payload", "nl_query"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
+
     try:
-        # Load and validate dataset
-        df_original = get_cached_dataframe(dataset_file)
+        # Load and validate dataset using cached functions tracking the hash
+        df_original = get_cached_dataframe(dataset_file, file_hash)
         if not validate_dataset(df_original):
             st.error("❌ The loaded dataset structure failed validation checks. Please review application logs.")
             return
             
         # Extract metadata
-        metadata = get_cached_metadata(df_original)
+        metadata = get_cached_metadata(df_original, file_hash)
         
         # Initialize state variables
         initialize_session_state(metadata)
@@ -393,64 +444,93 @@ def main() -> None:
         # 2. Hybrid Filters widget
         st.sidebar.subheader("Deterministic Filters")
         
+        # Initialize widget variables to safe defaults to avoid NameErrors
+        selected_genders = []
+        selected_diets = []
+        selected_workouts = []
+        selected_age_range = (18, 60)
+        selected_weight_range = (40, 120)
+        age_min_limit, age_max_limit = 18, 60
+        weight_min_limit, weight_max_limit = 40, 120
+        
+        has_any_filters = False
+        
         # Age slider
-        age_min_limit = int(metadata.get("Age", {}).get("range", {}).get("min", 18))
-        age_max_limit = int(metadata.get("Age", {}).get("range", {}).get("max", 60))
-        selected_age_range = st.sidebar.slider(
-            "Age Range",
-            min_value=age_min_limit,
-            max_value=age_max_limit,
-            value=(age_min_limit, age_max_limit),
-            key="widget_age_range"
-        )
-        
+        if "Age" in metadata:
+            has_any_filters = True
+            age_min_limit = int(metadata.get("Age", {}).get("range", {}).get("min", 18))
+            age_max_limit = int(metadata.get("Age", {}).get("range", {}).get("max", 60))
+            selected_age_range = st.sidebar.slider(
+                "Age Range",
+                min_value=age_min_limit,
+                max_value=age_max_limit,
+                value=(age_min_limit, age_max_limit),
+                key="widget_age_range"
+            )
+            
         # Weight slider
-        weight_min_limit = int(metadata.get("Weight (kg)", {}).get("range", {}).get("min", 40))
-        weight_max_limit = int(metadata.get("Weight (kg)", {}).get("range", {}).get("max", 120))
-        selected_weight_range = st.sidebar.slider(
-            "Weight Range (kg)",
-            min_value=weight_min_limit,
-            max_value=weight_max_limit,
-            value=(weight_min_limit, weight_max_limit),
-            key="widget_weight_range"
-        )
-        
+        if "Weight (kg)" in metadata:
+            has_any_filters = True
+            weight_min_limit = int(metadata.get("Weight (kg)", {}).get("range", {}).get("min", 40))
+            weight_max_limit = int(metadata.get("Weight (kg)", {}).get("range", {}).get("max", 120))
+            selected_weight_range = st.sidebar.slider(
+                "Weight Range (kg)",
+                min_value=weight_min_limit,
+                max_value=weight_max_limit,
+                value=(weight_min_limit, weight_max_limit),
+                key="widget_weight_range"
+            )
+            
         # Gender selection
-        gender_options = metadata.get("Gender", {}).get("unique_values", [])
-        selected_genders = st.sidebar.multiselect(
-            "Select Genders", 
-            options=gender_options, 
-            default=[],
-            key="widget_genders"
-        )
-        
+        if "Gender" in metadata:
+            has_any_filters = True
+            gender_options = metadata.get("Gender", {}).get("unique_values", [])
+            selected_genders = st.sidebar.multiselect(
+                "Select Genders", 
+                options=gender_options, 
+                default=[],
+                key="widget_genders"
+            )
+            
         # Diet Selection
-        diet_options = metadata.get("diet_type", {}).get("unique_values", [])
-        selected_diets = st.sidebar.multiselect(
-            "Select Diets", 
-            options=diet_options, 
-            default=[],
-            key="widget_diets"
-        )
-        
+        if "diet_type" in metadata:
+            has_any_filters = True
+            diet_options = metadata.get("diet_type", {}).get("unique_values", [])
+            selected_diets = st.sidebar.multiselect(
+                "Select Diets", 
+                options=diet_options, 
+                default=[],
+                key="widget_diets"
+            )
+            
         # Workout type selection
-        workout_options = metadata.get("Workout_Type", {}).get("unique_values", [])
-        selected_workouts = st.sidebar.multiselect(
-            "Select Workout Types", 
-            options=workout_options, 
-            default=[],
-            key="widget_workouts"
-        )
-        
+        if "Workout_Type" in metadata:
+            has_any_filters = True
+            workout_options = metadata.get("Workout_Type", {}).get("unique_values", [])
+            selected_workouts = st.sidebar.multiselect(
+                "Select Workout Types", 
+                options=workout_options, 
+                default=[],
+                key="widget_workouts"
+            )
+            
         # Reset filters button
-        if st.sidebar.button("Clear All Sidebar Filters", use_container_width=True):
-            logger.info("Resetting all sidebar widgets to defaults.")
-            st.session_state.widget_age_range = (age_min_limit, age_max_limit)
-            st.session_state.widget_weight_range = (weight_min_limit, weight_max_limit)
-            st.session_state.widget_genders = []
-            st.session_state.widget_diets = []
-            st.session_state.widget_workouts = []
-            st.rerun()
+        if has_any_filters:
+            if st.sidebar.button("Clear All Sidebar Filters", use_container_width=True):
+                logger.info("Resetting all sidebar widgets to defaults.")
+                if "widget_age_range" in st.session_state:
+                    st.session_state.widget_age_range = (age_min_limit, age_max_limit)
+                if "widget_weight_range" in st.session_state:
+                    st.session_state.widget_weight_range = (weight_min_limit, weight_max_limit)
+                if "widget_genders" in st.session_state:
+                    st.session_state.widget_genders = []
+                if "widget_diets" in st.session_state:
+                    st.session_state.widget_diets = []
+                if "widget_workouts" in st.session_state:
+                    st.session_state.widget_workouts = []
+                st.rerun()
+        else:
+            st.sidebar.info("No standard filters available for this dataset.")
             
         st.sidebar.markdown("---")
         
@@ -524,24 +604,26 @@ def main() -> None:
         # Read widget variables dynamically
         sidebar_filters = []
         
-        # Categorical lists
-        if selected_genders:
+        # Categorical lists with active metadata check
+        if "Gender" in metadata and selected_genders:
             sidebar_filters.append({"column": "Gender", "operator": "in", "value": selected_genders})
-        if selected_diets:
+        if "diet_type" in metadata and selected_diets:
             sidebar_filters.append({"column": "diet_type", "operator": "in", "value": selected_diets})
-        if selected_workouts:
+        if "Workout_Type" in metadata and selected_workouts:
             sidebar_filters.append({"column": "Workout_Type", "operator": "in", "value": selected_workouts})
             
         # Numeric sliders (only append if different from baseline metadata min/max)
-        if selected_age_range[0] > age_min_limit:
-            sidebar_filters.append({"column": "Age", "operator": ">=", "value": selected_age_range[0]})
-        if selected_age_range[1] < age_max_limit:
-            sidebar_filters.append({"column": "Age", "operator": "<=", "value": selected_age_range[1]})
+        if "Age" in metadata:
+            if selected_age_range[0] > age_min_limit:
+                sidebar_filters.append({"column": "Age", "operator": ">=", "value": selected_age_range[0]})
+            if selected_age_range[1] < age_max_limit:
+                sidebar_filters.append({"column": "Age", "operator": "<=", "value": selected_age_range[1]})
             
-        if selected_weight_range[0] > weight_min_limit:
-            sidebar_filters.append({"column": "Weight (kg)", "operator": ">=", "value": selected_weight_range[0]})
-        if selected_weight_range[1] < weight_max_limit:
-            sidebar_filters.append({"column": "Weight (kg)", "operator": "<=", "value": selected_weight_range[1]})
+        if "Weight (kg)" in metadata:
+            if selected_weight_range[0] > weight_min_limit:
+                sidebar_filters.append({"column": "Weight (kg)", "operator": ">=", "value": selected_weight_range[0]})
+            if selected_weight_range[1] < weight_max_limit:
+                sidebar_filters.append({"column": "Weight (kg)", "operator": "<=", "value": selected_weight_range[1]})
             
         # Merge both filter sources
         nl_filters = st.session_state.nl_payload.get("filters", [])
@@ -668,51 +750,61 @@ def main() -> None:
                 numeric_cols = filtered_df.select_dtypes(include=["number"]).columns.tolist()
                 group_cols = [c for c in filtered_df.select_dtypes(include=["object", "category", "bool", "string", "str"]).columns if filtered_df[c].nunique() <= 10]
                 
-                with v_col1:
-                    chart_col = st.selectbox(
-                        "Select Distribution Variable (KDE + Hist):", 
-                        options=numeric_cols,
-                        index=numeric_cols.index("Age") if "Age" in numeric_cols else 0,
-                        key="selected_chart_col"
-                    )
-                    render_distribution_plot(filtered_df, chart_col)
+                chart_col = None
+                if numeric_cols:
+                    with v_col1:
+                        chart_col = st.selectbox(
+                            "Select Distribution Variable (KDE + Hist):", 
+                            options=numeric_cols,
+                            index=numeric_cols.index("Age") if "Age" in numeric_cols else 0,
+                            key="selected_chart_col"
+                        )
+                        render_distribution_plot(filtered_df, chart_col)
+                else:
+                    st.info("No numeric columns available in the dataset for distribution plotting.")
                     
-                with v_col2:
-                    groupby_col = st.selectbox(
-                        "Select Grouping Category (Box Plot):",
-                        options=group_cols,
-                        index=group_cols.index("Gender") if "Gender" in group_cols else 0,
-                        key="selected_groupby_col"
-                    )
-                    render_group_boxplot(filtered_df, chart_col, groupby_col)
+                if numeric_cols and group_cols and chart_col:
+                    with v_col2:
+                        groupby_col = st.selectbox(
+                            "Select Grouping Category (Box Plot):",
+                            options=group_cols,
+                            index=group_cols.index("Gender") if "Gender" in group_cols else 0,
+                            key="selected_groupby_col"
+                        )
+                        render_group_boxplot(filtered_df, chart_col, groupby_col)
+                else:
+                    st.info("No grouping category columns available in the dataset for boxplot comparison.")
                     
                 st.markdown("---")
                 
                 # 3. Correlation Visualization
                 st.markdown("#### 🔗 Correlation Explorations")
-                corr_col1, corr_col2, corr_col3 = st.columns(3)
-                
-                with corr_col1:
-                    x_axis_var = st.selectbox(
-                        "X-Axis Variable", 
-                        options=numeric_cols,
-                        index=numeric_cols.index("Session_Duration (hours)") if "Session_Duration (hours)" in numeric_cols else 0
-                    )
-                with corr_col2:
-                    y_axis_var = st.selectbox(
-                        "Y-Axis Variable", 
-                        options=numeric_cols,
-                        index=numeric_cols.index("Calories_Burned") if "Calories_Burned" in numeric_cols else 0
-                    )
-                with corr_col3:
-                    hue_axis_var = st.selectbox(
-                        "Color / Legend Variable", 
-                        options=["None"] + group_cols,
-                        index=1 if "Gender" in group_cols else 0
-                    )
+                if len(numeric_cols) >= 2:
+                    corr_col1, corr_col2, corr_col3 = st.columns(3)
                     
-                hue_var = None if hue_axis_var == "None" else hue_axis_var
-                render_scatter_relationship(filtered_df, x_axis_var, y_axis_var, hue_var)
+                    with corr_col1:
+                        x_axis_var = st.selectbox(
+                            "X-Axis Variable", 
+                            options=numeric_cols,
+                            index=numeric_cols.index("Session_Duration (hours)") if "Session_Duration (hours)" in numeric_cols else 0
+                        )
+                    with corr_col2:
+                        y_axis_var = st.selectbox(
+                            "Y-Axis Variable", 
+                            options=numeric_cols,
+                            index=numeric_cols.index("Calories_Burned") if "Calories_Burned" in numeric_cols else 0
+                        )
+                    with corr_col3:
+                        hue_axis_var = st.selectbox(
+                            "Color / Legend Variable", 
+                            options=["None"] + group_cols,
+                            index=1 if "Gender" in group_cols else 0
+                        )
+                        
+                    hue_var = None if hue_axis_var == "None" else hue_axis_var
+                    render_scatter_relationship(filtered_df, x_axis_var, y_axis_var, hue_var)
+                else:
+                    st.info("At least two numeric columns are required in the dataset to plot correlations.")
                 
         # --- TAB 2: DATA PREVIEW ---
         with tab_preview:
