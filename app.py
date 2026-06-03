@@ -74,6 +74,7 @@ def inject_custom_styles() -> None:
         
         html, body, [class*="css"] {
             font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
         }
         
         /* Gradient titles */
@@ -81,7 +82,7 @@ def inject_custom_styles() -> None:
             font-family: 'Outfit', sans-serif;
             font-size: 2.8rem;
             font-weight: 800;
-            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #60a5fa 100%);
+            background: linear-gradient(135deg, #6366f1 0%, #0d9488 50%, #0284c7 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-bottom: 0.1rem;
@@ -93,21 +94,34 @@ def inject_custom_styles() -> None:
             margin-bottom: 2rem;
         }
         
-        /* Premium Card Layouts with shadows and hover effect */
+        /* Premium Card Layouts with glassmorphic look, gradient shadows and hover effect */
         .kpi-card {
-            background-color: #ffffff;
-            border-radius: 12px;
-            padding: 1.25rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-            border: 1px solid #e2e8f0;
-            transition: all 0.3s ease-in-out;
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 1.5rem 1rem;
+            box-shadow: 0 4px 20px 0 rgba(148, 163, 184, 0.08);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
             text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, #6366f1, #0d9488);
+            opacity: 0.8;
         }
         
         .kpi-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-            border-color: #3b82f6;
+            transform: translateY(-5px);
+            box-shadow: 0 12px 30px 0 rgba(99, 102, 241, 0.12);
+            border-color: rgba(99, 102, 241, 0.4);
         }
         
         .kpi-label {
@@ -121,37 +135,170 @@ def inject_custom_styles() -> None:
         
         .kpi-value {
             font-family: 'Outfit', sans-serif;
-            font-size: 2.0rem;
+            font-size: 1.8rem;
             font-weight: 700;
-            color: #1e293b;
+            color: #0f172a;
         }
         
         /* Status Badges */
         .badge {
             display: inline-flex;
             align-items: center;
-            padding: 0.25rem 0.75rem;
+            padding: 0.35rem 0.85rem;
             border-radius: 9999px;
             font-size: 0.8rem;
-            font-weight: 500;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
         }
         
         .badge-success {
-            background-color: #dcfce7;
-            color: #15803d;
-            border: 1px solid #bbf7d0;
+            background-color: #ecfdf5;
+            color: #047857;
+            border: 1px solid #a7f3d0;
         }
         
         .badge-error {
-            background-color: #fee2e2;
-            color: #b91c1c;
-            border: 1px solid #fecaca;
+            background-color: #fff5f5;
+            color: #c53030;
+            border: 1px solid #feb2b2;
         }
         
         .badge-warning {
-            background-color: #fef3c7;
-            color: #b45309;
+            background-color: #fffdf5;
+            color: #d97706;
             border: 1px solid #fde68a;
+        }
+
+        /* Streamlit primary and secondary buttons style override */
+        .stButton > button {
+            border-radius: 10px !important;
+            font-family: 'Inter', sans-serif !important;
+            font-weight: 600 !important;
+            font-size: 0.9rem !important;
+            padding: 0.5rem 1.25rem !important;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        }
+        
+        .stButton > button:not([kind="primary"]) {
+            border: 1px solid #e2e8f0 !important;
+            color: #334155 !important;
+            background-color: #ffffff !important;
+        }
+        
+        .stButton > button:not([kind="primary"]):hover {
+            border-color: #6366f1 !important;
+            color: #6366f1 !important;
+            background-color: #f8fafc !important;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.08) !important;
+            transform: translateY(-1px);
+        }
+        
+        .stButton > button[kind="primary"] {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+            color: white !important;
+            border: none !important;
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.2) !important;
+        }
+        
+        .stButton > button[kind="primary"]:hover {
+            background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%) !important;
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3) !important;
+            transform: translateY(-1px);
+        }
+
+        /* Style text inputs */
+        .stTextInput input {
+            border-radius: 10px !important;
+            border: 1px solid #e2e8f0 !important;
+            font-family: 'Inter', sans-serif !important;
+            padding: 0.6rem 1rem !important;
+            background-color: #ffffff !important;
+            transition: all 0.2s ease-in-out !important;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+        }
+        
+        .stTextInput input:focus {
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important;
+        }
+
+        /* Sidebar layout styling */
+        [data-testid="stSidebar"] {
+            background-color: #f8fafc !important;
+            border-right: 1px solid #edf2f7 !important;
+        }
+        
+        [data-testid="stSidebar"] h2 {
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Modern tabs styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 12px !important;
+            background-color: #f1f5f9 !important;
+            padding: 6px !important;
+            border-radius: 14px !important;
+            border-bottom: none !important;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 10px !important;
+            padding: 10px 20px !important;
+            font-weight: 600 !important;
+            font-size: 0.95rem !important;
+            color: #64748b !important;
+            background-color: transparent !important;
+            transition: all 0.25s ease !important;
+            border-bottom: none !important;
+        }
+        
+        .stTabs [data-baseweb="tab"]:hover {
+            color: #4f46e5 !important;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: #ffffff !important;
+            color: #4f46e5 !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+        }
+
+        /* Card panels for instructions */
+        .welcome-card {
+            background-color: #ffffff;
+            border-radius: 16px;
+            padding: 2.5rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e2e8f0;
+            margin-top: 1rem;
+        }
+        
+        .step-badge {
+            background: linear-gradient(135deg, #6366f1, #0d9488);
+            color: white;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 0.75rem;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+        }
+
+        .step-container {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 1.25rem;
+        }
+
+        .step-text {
+            font-size: 1rem;
+            color: #334155;
+            line-height: 1.6;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -204,10 +351,10 @@ def render_distribution_plot(dataframe: pd.DataFrame, column_name: str) -> None:
             st.info("No data available to plot.")
             return
 
-        fig, ax = plt.subplots(figsize=(7, 3.5))
-        sns.set_theme(style="whitegrid")
+        fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
+        ax.set_facecolor("#ffffff")
         
-        primary_color = "#3b82f6"  # modern primary blue
+        primary_color = "#6366f1"  # Indigo accent color
         
         sns.histplot(
             data=dataframe, 
@@ -217,21 +364,26 @@ def render_distribution_plot(dataframe: pd.DataFrame, column_name: str) -> None:
             ax=ax, 
             bins=15, 
             alpha=0.6,
-            edgecolor="white"
+            edgecolor="white",
+            line_kws={"linewidth": 2.5}
         )
         
-        ax.set_title(f"Distribution of {column_name}", fontsize=12, fontweight="bold", pad=12, color="#1e293b")
-        ax.set_xlabel(column_name, fontsize=9, color="#475569")
-        ax.set_ylabel("Count", fontsize=9, color="#475569")
-        ax.tick_params(labelsize=8)
+        ax.set_title(f"Distribution of {column_name}", fontsize=11, fontweight="bold", pad=12, color="#0f172a")
+        ax.set_xlabel(column_name, fontsize=8.5, color="#475569", labelpad=8)
+        ax.set_ylabel("Count", fontsize=8.5, color="#475569", labelpad=8)
+        ax.tick_params(labelsize=8, colors="#64748b")
         
+        ax.grid(True, linestyle="--", alpha=0.5, color="#e2e8f0")
+        for spine in ["top", "right", "left", "bottom"]:
+            ax.spines[spine].set_visible(False)
+            
         plt.tight_layout()
         
         # Save chart copy to reports directory for report generator
         try:
             chart_path = Path(BASE_DIR) / "reports" / "active_chart.png"
             chart_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(chart_path, dpi=150, bbox_inches="tight")
+            fig.savefig(chart_path, dpi=150, facecolor=fig.get_facecolor(), edgecolor="none", bbox_inches="tight")
         except Exception as save_err:
             logger.error(f"Failed to save active chart: {save_err}")
             
@@ -249,31 +401,37 @@ def render_group_boxplot(dataframe: pd.DataFrame, numeric_col: str, group_col: s
             st.info("No grouping data available.")
             return
 
-        fig, ax = plt.subplots(figsize=(7, 3.5))
-        sns.set_theme(style="whitegrid")
+        fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
+        ax.set_facecolor("#ffffff")
         
         sns.boxplot(
             data=dataframe, 
             x=group_col, 
             y=numeric_col, 
-            palette="Blues", 
+            palette="viridis", 
             ax=ax,
-            width=0.5
+            width=0.4,
+            linewidth=1.5,
+            fliersize=3
         )
         
-        ax.set_title(f"{numeric_col} grouped by {group_col}", fontsize=12, fontweight="bold", pad=12, color="#1e293b")
-        ax.set_xlabel(group_col, fontsize=9, color="#475569")
-        ax.set_ylabel(numeric_col, fontsize=9, color="#475569")
-        ax.tick_params(labelsize=8)
-        plt.xticks(rotation=30, ha="right")
+        ax.set_title(f"{numeric_col} grouped by {group_col}", fontsize=11, fontweight="bold", pad=12, color="#0f172a")
+        ax.set_xlabel(group_col, fontsize=8.5, color="#475569", labelpad=8)
+        ax.set_ylabel(numeric_col, fontsize=8.5, color="#475569", labelpad=8)
+        ax.tick_params(labelsize=8, colors="#64748b")
+        plt.xticks(rotation=20, ha="right")
         
+        ax.grid(True, linestyle="--", alpha=0.5, color="#e2e8f0")
+        for spine in ["top", "right", "left", "bottom"]:
+            ax.spines[spine].set_visible(False)
+            
         plt.tight_layout()
         
         # Save chart copy to reports directory for report generator
         try:
             chart_path = Path(BASE_DIR) / "reports" / "active_chart.png"
             chart_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(chart_path, dpi=150, bbox_inches="tight")
+            fig.savefig(chart_path, dpi=150, facecolor=fig.get_facecolor(), edgecolor="none", bbox_inches="tight")
         except Exception as save_err:
             logger.error(f"Failed to save active boxplot chart: {save_err}")
             
@@ -291,27 +449,32 @@ def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str,
             st.info("No correlation columns available.")
             return
 
-        fig, ax = plt.subplots(figsize=(7, 3.5))
-        sns.set_theme(style="whitegrid")
+        fig, ax = plt.subplots(figsize=(7, 3.5), facecolor="#f8fafc")
+        ax.set_facecolor("#ffffff")
         
         sns.scatterplot(
             data=dataframe, 
             x=x_col, 
             y=y_col, 
             hue=hue_col, 
-            palette="coolwarm" if hue_col else None,
-            alpha=0.7, 
+            palette="crest" if hue_col else None,
+            alpha=0.8, 
             ax=ax,
-            edgecolor="none"
+            edgecolor="none",
+            s=40
         )
         
-        ax.set_title(f"Correlation: {x_col} vs {y_col}", fontsize=12, fontweight="bold", pad=12, color="#1e293b")
-        ax.set_xlabel(x_col, fontsize=9, color="#475569")
-        ax.set_ylabel(y_col, fontsize=9, color="#475569")
-        ax.tick_params(labelsize=8)
+        ax.set_title(f"Correlation: {x_col} vs {y_col}", fontsize=11, fontweight="bold", pad=12, color="#0f172a")
+        ax.set_xlabel(x_col, fontsize=8.5, color="#475569", labelpad=8)
+        ax.set_ylabel(y_col, fontsize=8.5, color="#475569", labelpad=8)
+        ax.tick_params(labelsize=8, colors="#64748b")
         
         if hue_col and ax.get_legend():
-            plt.legend(title=hue_col, title_fontsize=8, fontsize=7, loc="upper right")
+            plt.legend(title=hue_col, title_fontsize=8, fontsize=7.5, loc="best", framealpha=0.8, edgecolor="#e2e8f0")
+            
+        ax.grid(True, linestyle="--", alpha=0.5, color="#e2e8f0")
+        for spine in ["top", "right", "left", "bottom"]:
+            ax.spines[spine].set_visible(False)
             
         plt.tight_layout()
         st.pyplot(fig)
@@ -319,6 +482,7 @@ def render_scatter_relationship(dataframe: pd.DataFrame, x_col: str, y_col: str,
     except Exception as e:
         logger.error(f"Error rendering scatter plot: {e}", exc_info=True)
         st.error("Failed to generate scatter correlation plot.")
+
 
 
 # ==============================================================================
@@ -390,17 +554,37 @@ def main() -> None:
                 file_hash = "default"
         else:
             # Graceful landing instructions, waiting for user file upload
-            st.info("👋 **Welcome to the NGO Data Analytics Hub!**")
             st.markdown("""
-            This platform provides secure, privacy-preserving, and AI-driven visual analytics on participant health cohorts.
-            
-            ### 🚀 Getting Started
-            1. **Ingest your dataset**: Upload a CSV dataset sheet using the **Dataset Ingestion** file uploader in the sidebar on the left.
-            2. **Analyze**: The engine will dynamically parse column metadata, identify categories, and initialize visual dashboard panels.
-            3. **Query & Export**: Ask conversational questions, filter metrics, view AI-recommended charts, and export executive PDF summaries.
-            
-            *Note: To leverage conversational queries or LLM report summaries, configure your OpenRouter API Key in the sidebar override or your environment.*
-            """)
+            <div class="welcome-card">
+                <h2 style='font-family: Outfit; font-weight: 800; color: #0f172a; margin-top: 0;'>👋 Welcome to the NGO Data Analytics Hub</h2>
+                <p style='color: #475569; font-size: 1.1rem; line-height: 1.6;'>
+                    This platform provides secure, privacy-preserving, and AI-driven visual analytics on participant health cohorts.
+                </p>
+                <div style='margin-top: 2rem; margin-bottom: 2rem;'>
+                    <div class="step-container">
+                        <div class="step-badge">1</div>
+                        <div class="step-text">
+                            <strong>Ingest your dataset</strong>: Upload a CSV dataset sheet using the <strong>Dataset Ingestion</strong> file uploader in the sidebar on the left.
+                        </div>
+                    </div>
+                    <div class="step-container">
+                        <div class="step-badge">2</div>
+                        <div class="step-text">
+                            <strong>Analyze</strong>: The engine will dynamically parse column metadata, identify categories, and initialize visual dashboard panels.
+                        </div>
+                    </div>
+                    <div class="step-container">
+                        <div class="step-badge">3</div>
+                        <div class="step-text">
+                            <strong>Query & Export</strong>: Ask conversational questions, filter metrics, view AI-recommended charts, and export executive PDF summaries.
+                        </div>
+                    </div>
+                </div>
+                <p style='color: #64748b; font-size: 0.9rem; font-style: italic; border-top: 1px solid #e2e8f0; padding-top: 1.25rem;'>
+                    Note: To leverage conversational queries or LLM report summaries, configure your OpenRouter API Key in the sidebar override or in your environment settings.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
             return
             
     # Reset filters if dataset changed to avoid slider bounds ValueError crash
@@ -425,6 +609,10 @@ def main() -> None:
         
         # Initialize state variables
         initialize_session_state(metadata)
+        
+        # Classify columns for widgets, dynamic KPIs, and overrides
+        numeric_cols = [col for col, info in metadata.items() if "number" in info["dtype"] or "int" in info["dtype"] or "float" in info["dtype"]]
+        group_cols = [col for col, info in metadata.items() if "object" in info["dtype"] or "str" in info["dtype"] or "string" in info["dtype"] or "category" in info["dtype"] or "bool" in info["dtype"]]
         
         # ==============================================================================
         # SIDEBAR PANEL - DETERMINISTIC CONTROLS & DIAGNOSTICS
@@ -681,11 +869,19 @@ def main() -> None:
         
         # --- TAB 1: ACTIVE ANALYTICS ---
         with tab_analytics:
-            # 1. Render Premium Custom KPI Cards
-            k_col1, k_col2, k_col3, k_col4, k_col5, k_col6 = st.columns(6)
+            # 1. Render Premium Dynamic KPI Cards
+            # Filter out ID-like columns to avoid displaying meaningless stats
+            displayable_cols = [
+                col for col in numeric_cols 
+                if col.lower() not in ["beneficiary_id", "id", "ssn", "index", "unnamed: 0"]
+            ]
             
-            # Matched rows card
-            with k_col1:
+            # Determine how many columns we can display (max 6, including Matched Samples)
+            num_cards = min(len(displayable_cols) + 1, 6)
+            kpi_cols = st.columns(num_cards)
+            
+            # Matched rows card (always first)
+            with kpi_cols[0]:
                 st.markdown(f"""
                 <div class="kpi-card">
                     <div class="kpi-label">Matched Samples</div>
@@ -693,65 +889,43 @@ def main() -> None:
                 </div>
                 """, unsafe_allow_html=True)
                 
-            # Average Calories
-            with k_col2:
+            # Render numerical aggregates dynamically
+            kpi_index = 1
+            for col in displayable_cols:
+                if kpi_index >= 6:
+                    break
+                    
                 avg_val = "N/A"
-                if "Calories" in filtered_df.columns and matched_count > 0:
-                    avg_val = f"{filtered_df['Calories'].mean():,.1f}"
-                st.markdown(f"""
-                <div class="kpi-card">
-                    <div class="kpi-label">Avg Calories</div>
-                    <div class="kpi-value">{avg_val}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                if matched_count > 0:
+                    val = filtered_df[col].mean()
+                    # Format unit suffix if name implies it
+                    unit = ""
+                    col_lower = col.lower()
+                    if "protein" in col_lower or "carb" in col_lower or "fat" in col_lower:
+                        unit = "g"
+                    elif "kg" in col_lower or "weight" in col_lower:
+                        unit = " kg"
+                    elif "hour" in col_lower or "duration" in col_lower:
+                        unit = "h"
+                    
+                    if float(val).is_integer():
+                        avg_val = f"{int(val):,}{unit}"
+                    else:
+                        avg_val = f"{val:,.1f}{unit}"
                 
-            # Average BMI
-            with k_col3:
-                avg_val = "N/A"
-                if "BMI" in filtered_df.columns and matched_count > 0:
-                    avg_val = f"{filtered_df['BMI'].mean():,.1f}"
-                st.markdown(f"""
-                <div class="kpi-card">
-                    <div class="kpi-label">Avg BMI</div>
-                    <div class="kpi-value">{avg_val}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            # Average Proteins
-            with k_col4:
-                avg_val = "N/A"
-                if "Proteins" in filtered_df.columns and matched_count > 0:
-                    avg_val = f"{filtered_df['Proteins'].mean():,.1f}g"
-                st.markdown(f"""
-                <div class="kpi-card">
-                    <div class="kpi-label">Avg Proteins</div>
-                    <div class="kpi-value">{avg_val}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            # Average Carbs
-            with k_col5:
-                avg_val = "N/A"
-                if "Carbs" in filtered_df.columns and matched_count > 0:
-                    avg_val = f"{filtered_df['Carbs'].mean():,.1f}g"
-                st.markdown(f"""
-                <div class="kpi-card">
-                    <div class="kpi-label">Avg Carbs</div>
-                    <div class="kpi-value">{avg_val}</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            # Average Fats
-            with k_col6:
-                avg_val = "N/A"
-                if "Fats" in filtered_df.columns and matched_count > 0:
-                    avg_val = f"{filtered_df['Fats'].mean():,.1f}g"
-                st.markdown(f"""
-                <div class="kpi-card">
-                    <div class="kpi-label">Avg Fats</div>
-                    <div class="kpi-value">{avg_val}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                # Format label dynamically
+                display_label = f"Avg {col}"
+                if any(x in col_lower for x in ["avg", "mean", "average"]):
+                    display_label = col
+                    
+                with kpi_cols[kpi_index]:
+                    st.markdown(f"""
+                    <div class="kpi-card">
+                        <div class="kpi-label">{display_label}</div>
+                        <div class="kpi-value">{avg_val}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                kpi_index += 1
                 
             st.markdown("<br>", unsafe_allow_html=True)
             
