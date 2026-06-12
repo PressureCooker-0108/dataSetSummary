@@ -31,12 +31,13 @@ RUN mkdir -p logs reports data && chown -R appuser:appuser /app
 # Switch to the non-root user
 USER appuser
 
-# Expose Streamlit default port
-EXPOSE 8501
+# Expose FastAPI default port
+EXPOSE 8000
 
 # Healthcheck to verify service availability on dynamic port
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD sh -c "curl --fail http://localhost:${PORT:-8501}/_stcore/health || exit 1"
+  CMD sh -c "curl --fail http://localhost:${PORT:-8000}/health || exit 1"
 
-# Launch the Streamlit application dynamically binding to the assigned $PORT (Render/Railway/etc.)
-CMD ["sh", "-c", "streamlit run app.py --server.port ${PORT:-8501} --server.address 0.0.0.0"]
+# Launch the FastAPI application dynamically binding to the assigned $PORT (Render/Railway/etc.)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+

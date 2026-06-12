@@ -1,8 +1,7 @@
 import os
 import time
-import logging
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, Optional
 import hashlib
 import pandas as pd
 import numpy as np
@@ -15,8 +14,6 @@ from utils.logger import get_logger
 from data_engine import (
     load_csv,
     validate_dataset,
-    analyze_schema,
-    generate_summary_report,
     extract_schema_metadata,
     parse_natural_language_query,
     validate_filter_payload,
@@ -26,7 +23,10 @@ from data_engine import (
     generate_executive_report_pdf,
     verify_reporting_pipeline,
     verify_openrouter_connection,
-    get_deterministic_graph_recommendations
+    get_deterministic_graph_recommendations,
+    profile_dataset,
+    validate_math_expression,
+    evaluate_math_expression
 )
 
 def check_any_key_configured(override_keys_str: str = None) -> bool:
@@ -571,6 +571,12 @@ def get_cached_recommendations(schema_metadata: Dict[str, Any], file_hash: str, 
     return recommend_visualizations(schema_metadata, api_key)
 
 
+@st.cache_data(show_spinner="Generating semantic dataset profile...")
+def get_cached_dataset_profile(dataframe: pd.DataFrame, file_hash: str, api_key: Optional[str]) -> Dict[str, Any]:
+    """Cache LLM semantic profiling of the dataset columns, invalidated on file hash change."""
+    return profile_dataset(dataframe, file_hash, api_key)
+
+
 # ==============================================================================
 # MAIN APP EXECUTION
 # ==============================================================================
@@ -669,6 +675,10 @@ def main() -> None:
             
         # Extract metadata
         metadata = get_cached_metadata(df_original, file_hash)
+        
+        # Get semantic profile of the dataset
+        api_key_override_val = st.session_state.get("api_key_override", None)
+        dataset_profile = get_cached_dataset_profile(df_original, file_hash, api_key_override_val)
         
         # Initialize state variables
         initialize_session_state(metadata)
@@ -805,7 +815,7 @@ def main() -> None:
         st.sidebar.subheader("System Status")
         st.sidebar.markdown(f"**Mode**: `{settings.ENV.upper()}`")
         st.sidebar.markdown(f"**Dataset Rows**: `{len(df_original):,}`")
-        st.sidebar.markdown(f"**Log Path**: `logs/app.log`")
+        st.sidebar.markdown("**Log Path**: `logs/app.log`")
         
         # ==============================================================================
         # CONVERSATIONAL QUERY CANVAS
@@ -855,13 +865,14 @@ def main() -> None:
                     payload = parse_natural_language_query(
                         query_val, 
                         metadata, 
-                        api_key=st.session_state.api_key_override
+                        api_key=st.session_state.api_key_override,
+                        dataset_profile=dataset_profile
                     )
                     if "error" in payload:
                         st.error(f"❌ LLM translation failed: {payload['error']}")
                     else:
                         st.session_state.nl_payload = payload
-                except Exception as e:
+                except Exception:
                     logger.exception("Conversational parsing failed:")
                     st.error("An unexpected error occurred during NLP query processing.")
                     
@@ -911,10 +922,25 @@ def main() -> None:
                 else:
                     st.error("❌ **Security Alert**: The combined filters failed local safety checks and cannot be executed.")
                     filtered_df = pd.DataFrame()
-        except Exception as filter_err:
+        except Exception:
             logger.exception("Safe execution pipeline error:")
             st.error("A validation exception occurred. Reverting to empty subset.")
             filtered_df = pd.DataFrame()
+            
+        # Evaluate user-defined metric expression if requested
+        metric_value = None
+        metric_expression = None
+        nl_payload = st.session_state.get("nl_payload", {})
+        if nl_payload and "expression" in nl_payload and nl_payload["expression"]:
+            expr = nl_payload["expression"]
+            try:
+                if validate_math_expression(expr, list(df_original.columns)):
+                    metric_value = evaluate_math_expression(filtered_df, expr)
+                    metric_expression = expr
+                else:
+                    st.warning(f"⚠️ Metric expression '{expr}' failed safety validation.")
+            except Exception as e:
+                logger.error(f"Error calculating metric expression '{expr}': {e}")
             
         # ==============================================================================
         # CORE DASHBOARD TABS
@@ -932,6 +958,37 @@ def main() -> None:
         
         # --- TAB 1: ACTIVE ANALYTICS ---
         with tab_analytics:
+            # Display user-defined metric if computed
+            if metric_value is not None:
+                if isinstance(metric_value, float):
+                    formatted_metric = f"{metric_value:,.4f}"
+                elif isinstance(metric_value, (int, np.integer)):
+                    formatted_metric = f"{metric_value:,}"
+                else:
+                    formatted_metric = str(metric_value)
+                    
+                st.markdown(f"""
+                <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <span style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #2563eb;">User-Defined Metric</span>
+                            <h3 style="margin: 0.25rem 0 0.5rem 0; font-family: Outfit, sans-serif; font-size: 1.25rem; font-weight: 700; color: #1e3a8a;">
+                                Inferred Metric Calculation
+                            </h3>
+                            <code style="background-color: #dbeafe; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.85rem; color: #1e40af;">
+                                {metric_expression}
+                            </code>
+                        </div>
+                        <div style="text-align: right;">
+                            <span style="font-size: 0.85rem; font-weight: 500; color: #64748b;">Result</span>
+                            <div style="font-size: 2.25rem; font-weight: 800; color: #1d4ed8; font-family: Outfit, sans-serif; margin-top: 0.25rem;">
+                                {formatted_metric}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
             # 1. Render Premium Dynamic KPI Cards
             # Filter out ID-like columns to avoid displaying meaningless stats
             displayable_cols = [
@@ -976,7 +1033,6 @@ def main() -> None:
                     else:
                         try:
                             f_val = float(val)
-                            import numpy as np
                             if np.isnan(f_val) or np.isinf(f_val):
                                 avg_val = "N/A"
                             elif f_val.is_integer():
@@ -1142,19 +1198,34 @@ def main() -> None:
                 
         # --- TAB 3: METADATA DEFINITIONS ---
         with tab_definitions:
-            st.markdown("### 🔍 Active Schema Definitions")
-            st.markdown("Columns metadata, pandas types, and completeness statistics:")
+            st.markdown("### 🔍 Dataset Theme & Schema Definitions")
+            if dataset_profile:
+                st.markdown(f"**Inferred Dataset Theme:** `{dataset_profile.get('theme', 'General Analysis')}`")
+            st.markdown("Columns metadata, semantic meanings, and completeness statistics:")
             
             # Map structural components
             col_list = []
             for col_name, info in get_cached_metadata(df_original, file_hash).items():
+                meaning = "N/A"
+                importance = "medium"
+                if dataset_profile and "columns" in dataset_profile and col_name in dataset_profile["columns"]:
+                    meaning = dataset_profile["columns"][col_name].get("meaning", "N/A")
+                    importance = dataset_profile["columns"][col_name].get("importance", "medium")
+                    
                 col_list.append({
                     "Variable name": col_name,
+                    "Semantic Meaning": meaning,
+                    "Importance": importance.capitalize(),
                     "Dtype": info["dtype"],
                     "Null Count": info["null_count"],
                     "Completeness Percentage": f"{100.0 - info['null_percentage']:.2f}%"
                 })
             st.dataframe(pd.DataFrame(col_list), use_container_width=True, hide_index=True)
+            
+            if dataset_profile and "suggested_queries" in dataset_profile:
+                st.markdown("💡 **Suggested Queries for this Dataset:**")
+                for sq in dataset_profile["suggested_queries"]:
+                    st.write(f"- *\"{sq}\"*")
             
         # --- TAB 4: EXPORT REPORTS ---
         with tab_reports:
@@ -1256,7 +1327,7 @@ def main() -> None:
                             logger.exception("PDF report compiler failed:")
                             st.error(f"❌ PDF generation failed: {pdf_compile_err}")
                             
-    except Exception as general_err:
+    except Exception:
         logger.exception("General application exception:")
         st.error("❌ **Critical Application Error**: Streamlit encountered an unexpected exception. Please check the logs.")
 

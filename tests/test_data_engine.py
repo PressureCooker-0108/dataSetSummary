@@ -23,7 +23,11 @@ from data_engine import (
     verify_reporting_pipeline,
     get_next_api_key,
     verify_openrouter_connection,
-    recommend_visualizations
+    recommend_visualizations,
+    validate_math_expression,
+    evaluate_math_expression,
+    profile_dataset,
+    get_dataset_hash
 )
 
 def test_initialize_logger():
@@ -455,3 +459,75 @@ def test_recommend_visualizations_malformed_json_fallback():
             assert len(recs["recommendations"]) == 3
             # Check that it falls back to the deterministic format
             assert recs["recommendations"][0]["title"].startswith("Distribution of")
+
+
+def test_validate_math_expression():
+    """Test validate_math_expression for whitelist conformity and safety checks."""
+    allowed_cols = ["Weight", "Age", "diet_type"]
+    
+    # Valid cases
+    assert validate_math_expression("df['Weight'].mean()", allowed_cols) is True
+    assert validate_math_expression("df['Age'].median() + 10", allowed_cols) is True
+    assert validate_math_expression("df.Weight.sum()", allowed_cols) is True
+    
+    # Invalid cases (unallowed methods, variables, or structures)
+    assert validate_math_expression("df['Weight'].apply(lambda x: x)", allowed_cols) is False
+    assert validate_math_expression("import os; os.system('echo 1')", allowed_cols) is False
+    assert validate_math_expression("df['Weight'].mean() * __builtins__['eval']('1')", allowed_cols) is False
+    assert validate_math_expression("df['Height'].mean()", allowed_cols) is False  # Column not allowed
+
+
+def test_evaluate_math_expression():
+    """Test evaluate_math_expression executes safe computations correctly."""
+    df = pd.DataFrame({"Weight": [50.0, 60.0, 70.0], "Age": [20, 30, 40]})
+    
+    assert evaluate_math_expression(df, "df['Weight'].mean()") == 60.0
+    assert evaluate_math_expression(df, "df['Age'].median()") == 30.0
+    assert evaluate_math_expression(df, "df['Weight'].sum() + 5") == 185.0
+    
+    with pytest.raises(ValueError):
+        evaluate_math_expression(df, "df['Weight'].apply(lambda x: x)")
+
+
+def test_get_dataset_hash(tmp_path):
+    """Test get_dataset_hash generates md5 sums correctly for bytes and files."""
+    data = b"hello world dataset content"
+    assert len(get_dataset_hash(data)) == 32
+    
+    test_file = tmp_path / "test_hash.csv"
+    test_file.write_bytes(data)
+    
+    h1 = get_dataset_hash(data)
+    h2 = get_dataset_hash(test_file)
+    assert h1 == h2
+
+
+def test_profile_dataset_fallback():
+    """Test profile_dataset falls back gracefully to deterministic profile if LLM fails."""
+    df = pd.DataFrame({"Weight": [60.0, 70.0], "Name": ["Alice", "Bob"]})
+    
+    # Mocking get_next_api_key to return empty string to trigger fallback
+    with patch("data_engine.get_next_api_key", return_value=""):
+        profile = profile_dataset(df, "dummy_hash_for_fallback")
+        assert profile["theme"] == "Tabular Dataset Analysis"
+        assert "Weight" in profile["columns"]
+        assert profile["columns"]["Weight"]["importance"] == "medium"
+
+
+def test_profile_dataset_success():
+    """Test profile_dataset successfully calls OpenRouter and caches result."""
+    df = pd.DataFrame({"Weight": [60.0, 70.0]})
+    mock_json = '{"theme": "Fitness Data", "columns": {"Weight": {"meaning": "Body weight", "importance": "high"}}, "suggested_queries": ["Q1"]}'
+    
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = mock_json
+    
+    with patch("openai.resources.chat.completions.Completions.create", return_value=mock_response):
+        with patch("data_engine.get_next_api_key", return_value="mock_key"):
+            with patch("data_engine.get_cached_profile", return_value=None):
+                with patch("data_engine.save_profile_cache") as mock_save:
+                    profile = profile_dataset(df, "new_unique_hash", api_key="mock_key")
+                    assert profile["theme"] == "Fitness Data"
+                    assert profile["columns"]["Weight"]["meaning"] == "Body weight"
+                    mock_save.assert_called_once()
+

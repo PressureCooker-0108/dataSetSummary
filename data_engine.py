@@ -3,7 +3,7 @@ import time
 import logging
 import json
 from pathlib import Path
-from typing import Dict, Any, Union, List, Tuple, Optional
+from typing import Dict, Any, Union, List, Optional
 import pandas as pd
 import numpy as np
 
@@ -440,7 +440,7 @@ def generate_summary_report(df: pd.DataFrame, output_path: Union[str, Path] = No
         fallback_path = output_path.with_suffix(".txt")
         try:
             with open(fallback_path, "w", encoding="utf-8") as f:
-                f.write(f"NGO Data Analytics Platform - Schema Summary\n")
+                f.write("NGO Data Analytics Platform - Schema Summary\n")
                 f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 f.write(f"Total Rows: {rows}\n")
                 f.write(f"Total Columns: {cols}\n")
@@ -508,26 +508,213 @@ def extract_schema_metadata(df: pd.DataFrame) -> Dict[str, Any]:
     return metadata
 
 
+def get_dataset_hash(file_bytes_or_path: Union[bytes, Path, str]) -> str:
+    """
+    Computes MD5 hash of the given dataset file bytes or file path.
+    """
+    import hashlib
+    hasher = hashlib.md5()
+    if isinstance(file_bytes_or_path, bytes):
+        hasher.update(file_bytes_or_path)
+    else:
+        path = Path(file_bytes_or_path)
+        if not path.exists():
+            # If path does not exist, hash the path string itself
+            hasher.update(str(path).encode('utf-8'))
+        else:
+            with open(path, 'rb') as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def get_cached_profile(dataset_hash: str) -> Optional[Dict[str, Any]]:
+    """
+    Attempts to read a cached dataset profile from the local data/profiles/ directory.
+    """
+    profiles_dir = BASE_DIR / "data" / "profiles"
+    profile_path = profiles_dir / f"{dataset_hash}.json"
+    if profile_path.exists():
+        try:
+            with open(profile_path, 'r', encoding='utf-8') as f:
+                profile = json.load(f)
+                logger.info(f"Loaded cached dataset profile for hash {dataset_hash}")
+                return profile
+        except Exception as e:
+            logger.warning(f"Failed to read cached profile {profile_path}: {e}")
+    return None
+
+
+def save_profile_cache(dataset_hash: str, profile: Dict[str, Any]) -> None:
+    """
+    Saves the dataset profile to data/profiles/ directory.
+    """
+    try:
+        profiles_dir = BASE_DIR / "data" / "profiles"
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+        profile_path = profiles_dir / f"{dataset_hash}.json"
+        with open(profile_path, 'w', encoding='utf-8') as f:
+            json.dump(profile, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved dataset profile for hash {dataset_hash} to {profile_path}")
+    except Exception as e:
+        logger.warning(f"Failed to cache dataset profile for hash {dataset_hash}: {e}")
+
+
+def profile_dataset(df: pd.DataFrame, dataset_hash: str, api_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Generates semantic profile of the dataset by sending column names and sample values to OpenRouter.
+    Uses caching.
+    """
+    # 1. Try to load cached profile
+    cached = get_cached_profile(dataset_hash)
+    if cached:
+        return cached
+
+    logger.info(f"No cached profile found. Generating profile for dataset hash {dataset_hash}")
+    
+    # 2. Extract column schema with 3 non-null sample values
+    schema_payload = {}
+    for col in df.columns:
+        dtype = str(df[col].dtype)
+        samples = []
+        try:
+            unique_vals = df[col].dropna().unique()
+            samples = [str(x) for x in unique_vals[:3].tolist()]
+        except Exception:
+            pass
+        schema_payload[col] = {
+            "dtype": dtype,
+            "samples": samples
+        }
+
+    # 3. Call LLM
+    active_key = get_next_api_key(api_key)
+    if not active_key:
+        logger.warning("No API Key available to profile dataset. Using fallback profile.")
+        return _get_fallback_profile(df)
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=active_key,
+            default_headers={
+                "HTTP-Referer": "https://localhost:8501",
+                "X-Title": "NGO Health Data Agent",
+            }
+        )
+        
+        prompt_instruction = (
+            "You are an expert Data Analyst and Researcher.\n"
+            "Your task is to analyze the columns and sample data of a new dataset to derive its semantic meaning and help build a dashboard profile.\n"
+            "For each column, explain its real-world meaning/purpose and determine its level of importance ('high', 'medium', or 'low') for research/analytics.\n\n"
+            "Here is the dataset schema with up to 3 non-null sample values for each column:\n"
+            f"{json.dumps(schema_payload, indent=2)}\n\n"
+            "RESPONSE FORMAT:\n"
+            "You must return a STRICT JSON object with these keys:\n"
+            "{\n"
+            "  \"theme\": \"A short description of the dataset theme (e.g. Health and Nutrition, Local District Survey, Socio-economic indicators)\",\n"
+            "  \"columns\": {\n"
+            "    \"col_name\": {\n"
+            "      \"meaning\": \"One sentence explaining what this column likely represents based on its name and samples\",\n"
+            "      \"importance\": \"high\" or \"medium\" or \"low\"\n"
+            "    }\n"
+            "  },\n"
+            "  \"suggested_queries\": [\n"
+            "    \"Example question 1 (simple filter)\",\n"
+            "    \"Example question 2 (filter and metric, e.g. average of X for Y)\",\n"
+            "    \"Example question 3 (more complex query)\"\n"
+            "  ]\n"
+            "}\n"
+        )
+        
+        def api_call():
+            return client.chat.completions.create(
+                model="openrouter/owl-alpha",
+                messages=[
+                    {"role": "system", "content": "You are a precise data analytics assistant that outputs strict JSON only."},
+                    {"role": "user", "content": prompt_instruction}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+
+        response = execute_with_backoff(api_call)
+        raw_content = response.choices[0].message.content.strip()
+        
+        if raw_content.startswith("```"):
+            lines = raw_content.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            raw_content = "\n".join(lines).strip()
+            
+        profile = json.loads(raw_content)
+        
+        if "theme" in profile and "columns" in profile:
+            save_profile_cache(dataset_hash, profile)
+            return profile
+        else:
+            raise ValueError("Parsed JSON missing 'theme' or 'columns' keys.")
+
+    except Exception as e:
+        logger.error(f"Failed to profile dataset via LLM: {e}. Using fallback.", exc_info=True)
+        return _get_fallback_profile(df)
+
+
+def _get_fallback_profile(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Generates a deterministic fallback profile in case of LLM API issues.
+    """
+    columns_info = {}
+    for col in df.columns:
+        dtype = str(df[col].dtype)
+        columns_info[col] = {
+            "meaning": f"Values of type {dtype}.",
+            "importance": "medium"
+        }
+    return {
+        "theme": "Tabular Dataset Analysis",
+        "columns": columns_info,
+        "suggested_queries": [
+            "Show summary of all rows",
+            f"Filter rows where {df.columns[0]} matches a value"
+        ]
+    }
+
+
+_query_translation_cache = {}
+
 def parse_natural_language_query(
     user_query: str, 
     schema_metadata: Dict[str, Any], 
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    dataset_profile: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Uses OpenRouter and owl-alpha to translate a natural language query into structured query filters.
+    Uses OpenRouter and owl-alpha to translate a natural language query into structured query filters and metrics.
     Only the metadata schema is sent to the LLM. No raw records are exposed.
     
     Args:
         user_query: Natural language question from the user.
         schema_metadata: Metadata schema dict from extract_schema_metadata.
         api_key: Optional override key(s) (can be comma-separated).
+        dataset_profile: Optional LLM-derived profile of the dataset.
         
     Returns:
-        dict: The LLM-generated JSON payload containing filters.
+        dict: The LLM-generated JSON payload containing filters and metric expression.
     """
     logger.info(f"Parsing natural language query: '{user_query}'")
     start_time = time.perf_counter()
     
+    global _query_translation_cache
+    # Construct cache key
+    cache_key = (user_query.strip().lower(), tuple(sorted(schema_metadata.keys())))
+    if cache_key in _query_translation_cache:
+        logger.info(f"Cache hit for query: '{user_query}'")
+        return _query_translation_cache[cache_key]
+        
     active_key = get_next_api_key(api_key)
     if not active_key:
         err_msg = "OpenRouter API Key is missing. Please set OPENROUTER_API_KEY."
@@ -561,10 +748,20 @@ def parse_natural_language_query(
         if "range" in info:
             simplified_schema[col]["range"] = info["range"]
             
+    column_meanings_str = ""
+    if dataset_profile and "columns" in dataset_profile:
+        meanings = []
+        for col, info in dataset_profile["columns"].items():
+            if col in schema_metadata:
+                meanings.append(f"  - '{col}': {info.get('meaning', 'No description.')}")
+        if meanings:
+            column_meanings_str = "COLUMN SEMANTIC MEANINGS (Use these to map intent to columns):\n" + "\n".join(meanings) + "\n\n"
+            
     prompt_instruction = (
-        "You are a Senior Data Engineer translating natural language queries into a list of structured DataFrame filters.\n"
-        "Given a schema metadata dictionary and a user query, map the query intent to a set of filters.\n\n"
-        "ALLOWED OPERATORS:\n"
+        "You are a Senior Data Engineer translating natural language queries into structured DataFrame filters and metrics.\n"
+        "Given a schema metadata dictionary, column semantic meanings, and a user query, map the query intent to a set of filters AND an optional mathematical expression to calculate a user-defined metric.\n\n"
+        f"{column_meanings_str}"
+        "ALLOWED OPERATORS FOR FILTERS:\n"
         "  - '==' (equality)\n"
         "  - '!=' (inequality)\n"
         "  - '>' (greater than)\n"
@@ -573,13 +770,32 @@ def parse_natural_language_query(
         "  - '<=' (less than or equal to)\n"
         "  - 'in' (membership in a list/values array)\n"
         "  - 'not in' (non-membership)\n\n"
-        "RULES:\n"
-        "1. Only filter on columns present in the schema. Check spelling and capitalization precisely.\n"
-        "2. Do not write Python code, lambda expressions, eval statements, or dynamic code.\n"
-        "3. Produce STRICT JSON output conforming to the schema specification below.\n"
-        "4. Cast numerical values in filters to float or int as appropriate.\n"
-        "5. For 'in' or 'not in', the 'value' MUST be a JSON array (list).\n"
-        "6. If the query does not map to any filters, return an empty filters list.\n\n"
+        "RULES FOR METRIC EXPRESSION:\n"
+        "1. If the query asks for a statistic/aggregation (such as average, median, sum, count, min, max, standard deviation/variance), provide a single pandas expression in the 'expression' key.\n"
+        "2. The expression must operate on the dataframe 'df', e.g., \"df['Age'].mean()\" or \"df['Weight'].median()\".\n"
+        "3. Supported aggregation functions are: mean(), median(), std(), sum(), count(), min(), max(), var().\n"
+        "4. If no specific metric/aggregation is requested in the user query, set the 'expression' value to null.\n\n"
+        "FEW-SHOT EXAMPLES:\n"
+        "Example 1:\n"
+        "  Query: \"average weight of vegans older than 30\"\n"
+        "  Response:\n"
+        "  {\n"
+        "    \"filters\": [\n"
+        "      {\"column\": \"diet_type\", \"operator\": \"==\", \"value\": \"vegan\"},\n"
+        "      {\"column\": \"Age\", \"operator\": \">\", \"value\": 30}\n"
+        "    ],\n"
+        "    \"expression\": \"df['Weight'].mean()\"\n"
+        "  }\n\n"
+        "Example 2:\n"
+        "  Query: \"females under 25\"\n"
+        "  Response:\n"
+        "  {\n"
+        "    \"filters\": [\n"
+        "      {\"column\": \"Gender\", \"operator\": \"==\", \"value\": \"Female\"},\n"
+        "      {\"column\": \"Age\", \"operator\": \"<\", \"value\": 25}\n"
+        "    ],\n"
+        "    \"expression\": null\n"
+        "  }\n\n"
         "RESPONSE JSON SCHEMA:\n"
         "{\n"
         "  \"filters\": [\n"
@@ -588,7 +804,8 @@ def parse_natural_language_query(
         "      \"operator\": \"operator_string\",\n"
         "      \"value\": filter_value\n"
         "    }\n"
-        "  ]\n"
+        "  ],\n"
+        "  \"expression\": \"optional_pandas_expression_string_or_null\"\n"
         "}\n\n"
         f"SCHEMA METADATA:\n{json.dumps(simplified_schema)}\n\n"
         f"USER QUERY:\n\"{user_query}\"\n"
@@ -637,6 +854,7 @@ def parse_natural_language_query(
             cleaned_content = "\n".join(lines).strip()
             
         payload = json.loads(cleaned_content)
+        _query_translation_cache[cache_key] = payload
         return payload
     except Exception as e:
         logger.error(f"Failed to parse query via OpenRouter: {e}", exc_info=True)
@@ -741,6 +959,116 @@ def _is_type_compatible(val: Any, col_dtype: Any) -> bool:
             
     # For object/string columns, allow any value convertible to string
     return True
+
+
+def validate_math_expression(expression: str, allowed_columns: List[str]) -> bool:
+    """
+    Safely validates a pandas expression using AST parsing.
+    Allows only:
+    - Variable reference to 'df'
+    - Subscript lookup on 'df' with string constants belonging to allowed_columns
+    - Whitelisted statistical/mathematical methods: 'mean', 'median', 'std', 'sum', 'count', 'min', 'max', 'var'
+    - Standard arithmetic operations
+    No arbitrary function calls, attribute access, or builtins.
+    """
+    import ast
+    if not expression or not isinstance(expression, str):
+        return False
+        
+    try:
+        tree = ast.parse(expression, mode='eval')
+    except Exception as e:
+        logger.warning(f"AST parsing failed for expression '{expression}': {e}")
+        return False
+        
+    allowed_methods = {'mean', 'median', 'std', 'sum', 'count', 'min', 'max', 'var'}
+    allowed_operators = {
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow,
+        ast.USub, ast.UAdd
+    }
+    
+    def _validate_node(node) -> bool:
+        if isinstance(node, ast.Expression):
+            return _validate_node(node.body)
+            
+        elif isinstance(node, ast.BinOp):
+            return (_validate_node(node.left) and 
+                    _validate_node(node.right) and 
+                    type(node.op) in allowed_operators)
+                    
+        elif isinstance(node, ast.UnaryOp):
+            return (_validate_node(node.operand) and 
+                    type(node.op) in allowed_operators)
+                    
+        elif isinstance(node, ast.Constant):
+            return isinstance(node.value, (int, float, str))
+            
+        elif hasattr(ast, 'Num') and isinstance(node, ast.Num):
+            return True
+        elif hasattr(ast, 'Str') and isinstance(node, ast.Str):
+            return isinstance(node.s, str)
+            
+        elif isinstance(node, ast.Name):
+            return node.id == 'df'
+            
+        elif isinstance(node, ast.Subscript):
+            if not isinstance(node.value, ast.Name) or node.value.id != 'df':
+                return False
+                
+            slice_val = node.slice
+            if isinstance(slice_val, ast.Constant):
+                col_name = slice_val.value
+            elif hasattr(ast, 'Index') and isinstance(slice_val, ast.Index):
+                if isinstance(slice_val.value, ast.Constant):
+                    col_name = slice_val.value.value
+                elif hasattr(ast, 'Str') and isinstance(slice_val.value, ast.Str):
+                    col_name = slice_val.value.s
+                else:
+                    return False
+            elif hasattr(ast, 'Str') and isinstance(slice_val, ast.Str):
+                col_name = slice_val.s
+            else:
+                return False
+                
+            return col_name in allowed_columns
+            
+        elif isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Attribute):
+                return False
+                
+            method_name = node.func.attr
+            if method_name not in allowed_methods:
+                logger.warning(f"Unapproved method call '{method_name}' in expression.")
+                return False
+                
+            if node.args or node.keywords:
+                return False
+                
+            return _validate_node(node.func.value)
+            
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name) and node.value.id == 'df':
+                return node.attr in allowed_columns
+            return False
+            
+        logger.warning(f"AST node of type {type(node).__name__} is not allowed.")
+        return False
+        
+    return _validate_node(tree)
+
+
+def evaluate_math_expression(dataframe: pd.DataFrame, expression: str) -> Any:
+    """
+    Safely evaluates a validated math expression on the dataframe.
+    """
+    if not validate_math_expression(expression, list(dataframe.columns)):
+        raise ValueError("Expression failed security validation check.")
+        
+    globals_dict = {"__builtins__": {}}
+    locals_dict = {"df": dataframe}
+    
+    code = compile(expression, "<string>", "eval")
+    return eval(code, globals_dict, locals_dict)
 
 
 def apply_filters(dataframe: pd.DataFrame, validated_payload: Dict[str, Any]) -> pd.DataFrame:
